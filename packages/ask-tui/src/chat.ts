@@ -1,11 +1,11 @@
 // UI-independent chat controller. Only submit() can ask the model, exactly once.
 import path from "node:path";
-import { askOnce, buildRequest, DEFAULT_MODEL, type ChatClient, type HistoryMessage, type TokenField } from "../chat.ts";
-import { collectContext, type ContextResult, type LimitOverrides } from "../context.ts";
+import { askOnce, buildRequest, DEFAULT_MODEL, type ChatClient, type HistoryMessage, type TokenField } from "@codehaus-au/ask/internal/chat";
+import { collectContext, type ContextResult, type LimitOverrides } from "@codehaus-au/ask/internal/context";
 import { applyUpdates, captureEditableFiles, parseUpdates, prepareUpdates, UPDATE_SYSTEM, updateDiff, type ProposedUpdate } from "./updates.ts";
-import { discoverSkills, filterSkills, loadSkill, renderSkills, resolveSkill, skillSearchPaths, type LoadedSkill, type SkillSummary } from "../skills.ts";
-import { terminalField } from "../terminal.ts";
-import { resolveRef } from "../refs.ts";
+import { discoverSkills, filterSkills, loadSkill, renderSkills, resolveSkill, skillSearchPaths, type LoadedSkill, type SkillSummary } from "@codehaus-au/ask/internal/skills";
+import { terminalField } from "@codehaus-au/ask/internal/terminal";
+import { resolveRef } from "@codehaus-au/ask/internal/refs";
 import { chatRefs } from "./mentions.ts";
 export { chatRefs } from "./mentions.ts";
 

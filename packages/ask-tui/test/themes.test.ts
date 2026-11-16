@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ASK_PALETTE, THEME_NAMES, themeModes, themePalette } from "../src/tui/themes.ts";
-import { draculaTheme } from "../src/tui/themes/dracula.ts";
-import { materialTheme } from "../src/tui/themes/material.ts";
+import { ASK_PALETTE, THEME_NAMES, themeModes, themePalette } from "../src/themes.ts";
+import { draculaTheme } from "../src/themes/dracula.ts";
+import { materialTheme } from "../src/themes/material.ts";
 
 test("all 40 termcn themes resolve using only their actual palettes", () => {
   assert.equal(THEME_NAMES.length, 41);

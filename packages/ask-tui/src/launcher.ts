@@ -3,7 +3,7 @@
 // automatic .env loading may run before the application's own checks.
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { terminalField } from "../terminal.ts";
+import { terminalField } from "@codehaus-au/ask/internal/terminal";
 
 const child = spawn("bun", [
   "--no-env-file", `--config=${fileURLToPath(new URL("./bunfig.toml", import.meta.url))}`,

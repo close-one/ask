@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { filterPopupItems, isFileCandidateVisible, SLASH_COMMANDS, type PopupItem } from "../src/tui/picker.ts";
-import { chatRefs, serializeMention } from "../src/tui/mentions.ts";
+import { filterPopupItems, isFileCandidateVisible, SLASH_COMMANDS, type PopupItem } from "../src/picker.ts";
+import { chatRefs, serializeMention } from "../src/mentions.ts";
 
 test("picker mentions round-trip parser delimiters and cannot introduce extra attachments", () => {
   for (const name of ["src/routes/(group)/page.ts", "notes).ts", "report,", "report;", "report:",

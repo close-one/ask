@@ -6,11 +6,10 @@ settings:
 
 importers:
 
-  .:
+  .: {}
+
+  packages/ask:
     dependencies:
-      '@opentui/core':
-        specifier: ^0.8.0
-        version: 0.8.0(typescript@7.0.2)(web-tree-sitter@0.25.10)
       marked:
         specifier: ^18.0.14
         version: 18.0.14
@@ -21,6 +20,28 @@ importers:
       '@types/node':
         specifier: ^26.6.3
         version: 26.6.3
+      typescript:
+        specifier: ^7.0.2
+        version: 7.0.2
+
+  packages/ask-tui:
+    dependencies:
+      '@codehaus-au/ask':
+        specifier: workspace:*
+        version: link:../ask
+      '@opentui/core':
+        specifier: ^0.8.0
+        version: 0.8.0(typescript@7.0.2)(web-tree-sitter@0.25.10)
+    devDependencies:
+      '@types/node':
+        specifier: ^26.6.3
+        version: 26.6.3
+      marked:
+        specifier: ^18.0.14
+        version: 18.0.14
+      openai:
+        specifier: ^7.23.0
+        version: 7.23.0
       typescript:
         specifier: ^7.0.2
         version: 7.0.2

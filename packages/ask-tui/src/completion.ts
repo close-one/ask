@@ -1,7 +1,7 @@
 import { StyledText, fg, type CliRenderer, type KeyEvent } from "@opentui/core";
-import { rankMatch } from "../refs.ts";
-import { terminalField } from "../terminal.ts";
-import type { SkillSummary } from "../skills.ts";
+import { rankMatch } from "@codehaus-au/ask/internal/refs";
+import { terminalField } from "@codehaus-au/ask/internal/terminal";
+import type { SkillSummary } from "@codehaus-au/ask/internal/skills";
 import type { TuiChat } from "./chat.ts";
 import type { ChatLayout } from "./layout.ts";
 import type { TuiTheme } from "./theme.ts";

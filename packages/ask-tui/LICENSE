@@ -1,18 +1,6 @@
-# termcn OpenTUI themes
+MIT License
 
-The 40 theme definitions in `src/tui/themes/` are vendored from the
-`@termcn/opentui` source registry at revision
-https://github.com/shadcn-labs/termcn/tree/5a02dae79542add57ba392d2b51785138d0c3b6e/apps/web/registry/bases/opentui/themes
-(registry documentation: https://termcn.dev/docs/theming/opentui).
-Only their type-import paths were changed. `src/tui/themes/types.ts` contains the
-theme-only interfaces from the corresponding `ui/types.ts`, without React context
-interfaces. Colors are adapted to ask's UI roles in `src/tui/themes.ts`; spacing,
-border shapes and typography remain controlled by ask's existing layout.
-No React provider, registry CLI, runtime library, or network theme lookup is used.
-
-## MIT License
-
-Copyright (c) 2026 Aniket Pawar
+Copyright (c) 2026 codehausau
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

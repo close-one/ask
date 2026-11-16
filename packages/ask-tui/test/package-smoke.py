@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Exercise the installed ask-tui launcher/native UI in a real PTY, offline.
 
-Run after installing the tarball: python3 test/tui-package-smoke.py [launcher]
+Run after installing the tarball: python3 packages/ask-tui/test/package-smoke.py [launcher]
 The optional launcher path supports checking a local build with the same harness.
 """
 import errno

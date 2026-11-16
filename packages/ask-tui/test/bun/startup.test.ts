@@ -8,7 +8,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
-const configFlags = [`--config=${fileURLToPath(new URL("../../src/tui/bunfig.toml", import.meta.url))}`];
+const configFlags = [`--config=${fileURLToPath(new URL("../../src/bunfig.toml", import.meta.url))}`];
 const run = promisify(execFile);
 
 test("Node launcher ignores repository and global Bun preload hooks, even for help", async () => {
@@ -29,7 +29,7 @@ test("Node launcher ignores repository and global Bun preload hooks, even for he
     await run(process.execPath, ["--no-env-file", "-e", "0"], { cwd, env });
     await access(marker);
     await rm(marker);
-    const launcher = fileURLToPath(new URL("../../dist/src/tui/launcher.js", import.meta.url));
+    const launcher = fileURLToPath(new URL("../../dist/src/launcher.js", import.meta.url));
     for (const args of [["--help"], ["--list-skills"]]) {
       const result = await run("node", [launcher, ...args], { cwd, env, timeout: 10_000 });
       assert.match(result.stdout, args[0] === "--help" ? /ask-tui/ : /Search paths:/);
@@ -46,7 +46,7 @@ test("startup theme uses flag over exported default and ignores automatic .env t
     for (const key of Object.keys(env)) {
       if (/^(ASK_|OPENAI_|BUN_)/.test(key)) delete env[key];
     }
-    const entry = new URL("../../src/tui/index.ts", import.meta.url).href;
+    const entry = new URL("../../src/index.ts", import.meta.url).href;
     const cases = [
       { value: undefined, args: [], expected: /no API key/ },
       { value: "dracula", args: [], expected: /no API key/ },
@@ -84,7 +84,7 @@ test("context capacity accepts an exported default, validates it and prefers the
     for (const key of Object.keys(env)) {
       if (/^(ASK_|OPENAI_|BUN_)/.test(key)) delete env[key];
     }
-    const entry = new URL("../../src/tui/index.ts", import.meta.url).href;
+    const entry = new URL("../../src/index.ts", import.meta.url).href;
     const cases = [
       { value: "32768", args: [], expected: /no API key/ },
       { value: "invalid", args: ["--context-window", "65536"], expected: /no API key/ },
@@ -119,7 +119,7 @@ test("TUI can list skills offline without an API key or terminal", async () => {
     await writeFile(path.join(cwd, "review.md"), "---\nname: offline-review\ndescription: Check offline\n---\nReview.");
     const env: NodeJS.ProcessEnv = { ...process.env, ASK_SKILLS_DIR: cwd };
     delete env["OPENAI_API_KEY"];
-    const entry = new URL("../../src/tui/index.ts", import.meta.url);
+    const entry = new URL("../../src/index.ts", import.meta.url);
     const result = await new Promise<string>((resolve, reject) => {
       execFile(process.execPath, ["--no-env-file", ...configFlags, fileURLToPath(entry), "--list-skills"], { cwd, env, timeout: 10_000 }, (error, stdout) => {
         if (error) reject(error); else resolve(stdout);
@@ -143,7 +143,7 @@ test("real Bun entry refuses autoload and repository-selected endpoints before a
     for (const key of Object.keys(env)) {
       if (/^(ASK_|OPENAI_|BUN_)/.test(key)) delete env[key];
     }
-    const entry = new URL("../../src/tui/index.ts", import.meta.url).href;
+    const entry = new URL("../../src/index.ts", import.meta.url).href;
     const bootstrap = `
       process.argv = [process.execPath, "tui.ts"];
       Object.defineProperty(process.stdin, "isTTY", { value: true });

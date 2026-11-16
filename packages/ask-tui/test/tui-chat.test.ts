@@ -4,11 +4,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import type { ChatCompletion } from "openai/resources/chat/completions";
-import type { ChatClient, OneShotRequest } from "../src/chat.ts";
-import { chatRefs, TuiChat } from "../src/tui/chat.ts";
-import { mentionCandidates } from "../src/refs.ts";
-import { MAX_SKILL_BYTES, SkillResolutionError } from "../src/skills.ts";
-import { collectContext } from "../src/context.ts";
+import type { ChatClient, OneShotRequest } from "@codehaus-au/ask/internal/chat";
+import { chatRefs, TuiChat } from "../src/chat.ts";
+import { mentionCandidates } from "@codehaus-au/ask/internal/refs";
+import { MAX_SKILL_BYTES, SkillResolutionError } from "@codehaus-au/ask/internal/skills";
+import { collectContext } from "@codehaus-au/ask/internal/context";
 
 function block(target: string, search: string, replacement: string) {
   return `<update path=${JSON.stringify(target)}>\n<<<<<<< SEARCH\n${search}\n=======\n${replacement}\n>>>>>>> REPLACE\n</update>`;

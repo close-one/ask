@@ -1,6 +1,6 @@
 import type { CliRenderer, KeyEvent } from "@opentui/core";
-import { terminalField } from "../terminal.ts";
-import { SkillResolutionError } from "../skills.ts";
+import { terminalField } from "@codehaus-au/ask/internal/terminal";
+import { SkillResolutionError } from "@codehaus-au/ask/internal/skills";
 import { TuiChat } from "./chat.ts";
 import { themeModes, type ThemeMode } from "./themes.ts";
 import { TuiTheme } from "./theme.ts";

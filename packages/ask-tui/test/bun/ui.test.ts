@@ -5,10 +5,10 @@ import path from "node:path";
 import test, { type TestContext } from "node:test";
 import { createTestRenderer as createOpenTuiTestRenderer } from "@opentui/core/testing";
 import { BoxRenderable, TextRenderable, TextAttributes, parseColor, type ClipboardReadResult, type TextChunk, type Renderable } from "@opentui/core";
-import type { ChatClient, OneShotRequest } from "../../src/chat.ts";
-import { TuiChat } from "../../src/tui/chat.ts";
-import { mountChatUI, SIDEBAR_MIN_WIDTH, SIDEBAR_MIN_COLUMNS, CHAT_MIN_COLUMNS } from "../../src/tui/ui.ts";
-import { ASK_PALETTE, themePalette } from "../../src/tui/themes.ts";
+import type { ChatClient, OneShotRequest } from "@codehaus-au/ask/internal/chat";
+import { TuiChat } from "../../src/chat.ts";
+import { mountChatUI, SIDEBAR_MIN_WIDTH, SIDEBAR_MIN_COLUMNS, CHAT_MIN_COLUMNS } from "../../src/ui.ts";
+import { ASK_PALETTE, themePalette } from "../../src/themes.ts";
 
 // Match the real entry point: Ctrl+C belongs to the application, not OpenTUI.
 const createTestRenderer = (options: Parameters<typeof createOpenTuiTestRenderer>[0]) =>

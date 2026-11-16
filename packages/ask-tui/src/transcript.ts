@@ -3,7 +3,7 @@ import {
   bold, fg, italic, strikethrough, type CliRenderer, type ScrollBoxRenderable, type TextChunk,
 } from "@opentui/core";
 import type { Token } from "marked";
-import { sanitizeForTerminal, terminalField } from "../terminal.ts";
+import { sanitizeForTerminal, terminalField } from "@codehaus-au/ask/internal/terminal";
 import type { TuiTheme } from "./theme.ts";
 import { COMPOSER_PADDING } from "./layout.ts";
 

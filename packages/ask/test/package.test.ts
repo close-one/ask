@@ -7,7 +7,7 @@ import { access, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:f
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 const run = promisify(execFile);
@@ -54,35 +54,41 @@ test("the npm tarball contains the runnable CLI and completions, without source/
   assert.equal(archive.version, manifest.version);
   const files = new Set(archive.files.map((file) => file.path));
   for (const required of [
-    "package.json", "README.md", "SECURITY.md", "LICENSE", "THIRD_PARTY_NOTICES.md", "completions/ask.bash",
+    "package.json", "README.md", "SECURITY.md", "LICENSE", "completions/ask.bash",
     "dist/src/cli.js", "dist/src/safe-write.js", "dist/src/terminal.js",
-    "dist/src/tui/launcher.js", "dist/src/tui/index.js", "dist/src/tui/ui.js", "dist/src/tui/bunfig.toml",
-    "dist/src/tui/chat.js", "dist/src/tui/picker.js", "dist/src/tui/updates.js",
-    "dist/src/tui/themes.js", "dist/src/tui/theme.js", "dist/src/tui/themes/default.js", "dist/src/tui/themes/dracula.js", "dist/src/tui/themes/high-contrast-light.js",
   ]) assert.ok(files.has(required), `missing packaged file: ${required}`);
+  // ask-tui is published separately; none of it, nor OpenTUI, belongs here.
+  assert.equal(manifest.dependencies["@opentui/core"], undefined);
+  assert.equal(manifest.bin["ask-tui"], undefined);
+  for (const [subpath, target] of Object.entries(manifest.exports as Record<string, string | { types: string; default: string }>)) {
+    if (typeof target === "string") continue;
+    assert.ok(files.has(target.default.slice(2)), `missing export ${subpath}: ${target.default}`);
+    assert.ok(files.has(target.types.slice(2)), `missing export types ${subpath}: ${target.types}`);
+  }
   for (const file of files) {
     assert.ok(file.startsWith("dist/src/") || file.startsWith("completions/") ||
-      ["package.json", "README.md", "SECURITY.md", "LICENSE", "THIRD_PARTY_NOTICES.md"].includes(file), `unexpected packaged file: ${file}`);
+      ["package.json", "README.md", "SECURITY.md", "LICENSE"].includes(file), `unexpected packaged file: ${file}`);
     assert.doesNotMatch(file, /(^|\/)\.env(?:\.|$)|(^|\/)\.npmrc$/);
-    assert.doesNotMatch(file, /^dist\/src\/(?:tui(?:-\w+)?\.(?:js|js\.map)|themes(?:\/|\.)|updates\.)/, "obsolete flat TUI files must not ship");
+    assert.doesNotMatch(file, /^dist\/src\/(?:tui(?:[-/.]|$)|themes(?:\/|\.)|updates\.)/, "TUI files ship in @codehaus-au/ask-tui");
   }
 
   const tarball = path.join(packedDir, archive.filename);
   await run("tar", ["-xzf", tarball, "-C", extracted], { env });
   const installed = path.join(extracted, "package");
-  assert.equal([...files].filter((file) => file.startsWith("dist/src/tui/themes/") && file.endsWith(".json")).length, 0, "obsolete OpenCode assets must not ship");
-  assert.equal([...files].filter((file) => file.startsWith("dist/src/tui/themes/") && file.endsWith(".js") && !file.endsWith("/types.js")).length, 40);
   await symlink(path.join(ROOT, "node_modules"), path.join(installed, "node_modules"), "junction");
   const cli = path.join(installed, "dist", "src", "cli.js");
   await access(cli, constants.X_OK);
-  await access(path.join(installed, "dist", "src", "tui", "launcher.js"), constants.X_OK);
-  assert.equal(manifest.bin["ask-tui"], "dist/src/tui/launcher.js");
-  const themes = await run(process.execPath, ["--input-type=module", "-e", `
-    const { THEME_NAMES, themeModes, themePalette } = await import(${JSON.stringify(pathToFileURL(path.join(installed, "dist/src/tui/themes.js")).href)});
-    for (const name of THEME_NAMES) for (const mode of themeModes(name)) themePalette(name, mode);
-    console.log(THEME_NAMES.length);
-  `], { cwd: base, env });
-  assert.equal(themes.stdout.trim(), "41");
+  // The internal subpaths ask-tui imports must resolve through "exports" in the
+  // installed layout, not only through the workspace link.
+  const probe = path.join(installed, "exports-probe.mjs");
+  await writeFile(probe, `
+    const { terminalField } = await import("@codehaus-au/ask/internal/terminal");
+    const { DEFAULT_RESPONSE_TIMEOUT_MS } = await import("@codehaus-au/ask/internal/timeout");
+    console.log(terminalField("a\\nb"), DEFAULT_RESPONSE_TIMEOUT_MS);
+  `);
+  const exported = await run(process.execPath, [probe], { cwd: base, env });
+  assert.equal(exported.stdout.trim(), "a\\nb 120000");
+  await rm(probe);
   const version = await run(process.execPath, [cli, "--version"], { cwd: base, env });
   assert.equal(version.stdout.trim(), `ask ${manifest.version}`);
   const completion = await run(process.execPath, [cli, "--install-completion"], { cwd: base, env });

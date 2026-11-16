@@ -2,7 +2,7 @@ import {
   BoxRenderable, ScrollBoxRenderable, TextareaRenderable, TextRenderable, StyledText, fg, bold,
   type CliRenderer, type MouseEvent,
 } from "@opentui/core";
-import { terminalField } from "../terminal.ts";
+import { terminalField } from "@codehaus-au/ask/internal/terminal";
 import type { TuiSessionStats } from "./chat.ts";
 
 export const SIDEBAR_MIN_WIDTH = 120;

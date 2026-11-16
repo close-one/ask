@@ -1,5 +1,5 @@
 import { createHostClipboard, PasteEvent, type CliRenderer, type HostClipboardService, type TextareaRenderable, type TextRenderable } from "@opentui/core";
-import { sanitizeForTerminal } from "../terminal.ts";
+import { sanitizeForTerminal } from "@codehaus-au/ask/internal/terminal";
 
 const MAX_PASTE_BYTES = 1024 * 1024;
 export type ClipboardFactory = () => Pick<HostClipboardService, "read" | "dispose">;

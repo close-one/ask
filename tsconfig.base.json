@@ -1,3 +1,5 @@
+// Shared compiler options. Each package sets its own rootDir, outDir and include,
+// because those paths resolve relative to the file that declares them.
 {
   "compilerOptions": {
     "target": "es2023",
@@ -6,10 +8,7 @@
     "moduleResolution": "nodenext",
     "types": ["node"],
 
-    "rootDir": ".",
-    "outDir": "dist",
     "sourceMap": true,
-    "declaration": false,
 
     "strict": true,
     "noUncheckedIndexedAccess": true,
@@ -27,6 +26,5 @@
     "allowImportingTsExtensions": true,
     "rewriteRelativeImportExtensions": true,
     "skipLibCheck": true
-  },
-  "include": ["src/**/*.ts", "test/**/*.ts"]
+  }
 }

@@ -1,10 +1,10 @@
 // A text protocol, not function calling. Parsing never performs filesystem I/O.
 import path from "node:path";
-import type { ContextBlock } from "../context.ts";
+import type { ContextBlock } from "@codehaus-au/ask/internal/context";
 import {
   assertWriteTargetUnchanged, inspectWriteTarget, replaceWriteTarget,
   type WriteSnapshot,
-} from "../safe-write.ts";
+} from "@codehaus-au/ask/internal/safe-write";
 
 export const UPDATE_SYSTEM = `You are in a user-driven chat, not an agent. Answer the user's question directly.
 You cannot call tools, run commands, or read files other than the attached context.

@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 const run = promisify(execFile);
-const launcher = fileURLToPath(new URL(import.meta.url.endsWith(".ts") ? "../src/tui/launcher.ts" : "../src/tui/launcher.js", import.meta.url));
+const launcher = fileURLToPath(new URL(import.meta.url.endsWith(".ts") ? "../src/launcher.ts" : "../src/launcher.js", import.meta.url));
 
 test("TUI launcher disables Bun env autoload and forwards literal arguments without a shell", async () => {
   const cwd = await mkdtemp(path.join(tmpdir(), "ask-launcher-"));
@@ -21,8 +21,8 @@ test("TUI launcher disables Bun env autoload and forwards literal arguments with
       cwd, env: { ...process.env, PATH: cwd },
     });
     assert.deepEqual(JSON.parse(result.stdout), [
-      "--no-env-file", `--config=${fileURLToPath(new URL("../src/tui/bunfig.toml", import.meta.url))}`,
-      fileURLToPath(new URL("../src/tui/index.js", import.meta.url)), ...args,
+      "--no-env-file", `--config=${fileURLToPath(new URL("../src/bunfig.toml", import.meta.url))}`,
+      fileURLToPath(new URL("../src/index.js", import.meta.url)), ...args,
     ]);
   } finally { await rm(cwd, { recursive: true, force: true }); }
 });

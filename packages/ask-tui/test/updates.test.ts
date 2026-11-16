@@ -3,8 +3,8 @@ import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { collectContext } from "../src/context.ts";
-import { applyUpdates, captureEditableFiles, parseUpdates, prepareUpdates, updateDiff } from "../src/tui/updates.ts";
+import { collectContext } from "@codehaus-au/ask/internal/context";
+import { applyUpdates, captureEditableFiles, parseUpdates, prepareUpdates, updateDiff } from "../src/updates.ts";
 
 export function update(target: string, search: string, replacement: string): string {
   return `<update path=${JSON.stringify(target)}>\n<<<<<<< SEARCH\n${search}\n=======\n${replacement}\n>>>>>>> REPLACE\n</update>`;

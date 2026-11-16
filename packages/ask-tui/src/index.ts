@@ -2,13 +2,13 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { createClient, DEFAULT_MODEL, isInsecureHttpEndpoint } from "../chat.ts";
-import { applyEnvFiles, endpointFromEnvFile, PROJECT_ENV_KEYS } from "../env.ts";
-import { mentionCandidates } from "../refs.ts";
-import { terminalField } from "../terminal.ts";
-import { responseTimeoutMs } from "../timeout.ts";
+import { createClient, DEFAULT_MODEL, isInsecureHttpEndpoint } from "@codehaus-au/ask/internal/chat";
+import { applyEnvFiles, endpointFromEnvFile, PROJECT_ENV_KEYS } from "@codehaus-au/ask/internal/env";
+import { mentionCandidates } from "@codehaus-au/ask/internal/refs";
+import { terminalField } from "@codehaus-au/ask/internal/terminal";
+import { responseTimeoutMs } from "@codehaus-au/ask/internal/timeout";
 import { TuiChat } from "./chat.ts";
-import { discoverSkills, skillSearchPaths, SkillResolutionError } from "../skills.ts";
+import { discoverSkills, skillSearchPaths, SkillResolutionError } from "@codehaus-au/ask/internal/skills";
 import { themeModes } from "./themes.ts";
 
 const HELP = `ask-tui — user-driven OpenTUI chat (Bun 1.3.14+)
@@ -64,7 +64,7 @@ async function main() {
   if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error("ask-tui requires an interactive terminal. Use ask for pipes and scripts.");
   const here = path.dirname(fileURLToPath(import.meta.url));
   const reports = await applyEnvFiles([
-    path.join(cwd, ".env"), path.resolve(here, "..", "..", "..", ".env"), path.resolve(here, "..", "..", ".env"),
+    path.join(cwd, ".env"), path.resolve(here, "..", "..", ".env"), path.resolve(here, "..", ".env"),
   ].map((file) => ({ file, allow: PROJECT_ENV_KEYS })));
   if (!values["base-url"] && endpointFromEnvFile(reports)) {
     throw new Error("Refusing an endpoint selected by an automatic .env file. Export OPENAI_BASE_URL or pass --base-url explicitly.");

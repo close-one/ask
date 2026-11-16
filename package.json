@@ -7,7 +7,7 @@
     "build": "pnpm -r build",
     "typecheck": "pnpm --filter @codehaus-au/ask build && pnpm -r typecheck",
     "test": "pnpm -r test",
-    "test:bun": "pnpm -r build && pnpm --filter @codehaus-au/ask-tui exec bun test ./test/bun",
+    "test:bun": "pnpm --filter @codehaus-au/ask build && pnpm --filter @codehaus-au/ask-tui test:bun",
     "audit": "pnpm audit --audit-level high --prod",
     "check": "pnpm typecheck && pnpm test && pnpm audit",
     "ask": "node packages/ask/dist/src/cli.js",

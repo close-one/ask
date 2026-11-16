@@ -9,6 +9,10 @@ export const OPTIONS = {
   "base-url": { type: "string" },
   "allow-insecure-http": { type: "boolean" },
   "api-key": { type: "string" },
+  config: { type: "string" },
+  "show-config": { type: "boolean" },
+  trust: { type: "boolean" },
+  untrust: { type: "boolean" },
   file: { type: "string", short: "f", multiple: true },
   "max-tokens": { type: "string" },
   temperature: { type: "string" },
@@ -63,6 +67,9 @@ export const VERBS: Readonly<Record<string, string>> = {
   "/diff": "diff",
   "/create": "create",
   "/skills": "list-skills",
+  "/config": "show-config",
+  "/trust": "trust",
+  "/untrust": "untrust",
 };
 
 /** Verbs that consume the next positional as their value, e.g. `/switch docs`. */

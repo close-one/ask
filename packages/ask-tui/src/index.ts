@@ -2,11 +2,12 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { createClient, DEFAULT_MODEL, isInsecureHttpEndpoint } from "@codehaus-au/ask/internal/chat";
-import { applyEnvFiles, endpointFromEnvFile, PROJECT_ENV_KEYS } from "@codehaus-au/ask/internal/env";
+import { createClient, DEFAULT_MODEL, isInsecureHttpEndpoint, isLoopbackEndpoint } from "@codehaus-au/ask/internal/chat";
+import { describeSettings, flagLayer, globalConfigDir, loadSettings } from "@codehaus-au/ask/internal/config";
+import { legacyEnvNotice } from "@codehaus-au/ask/internal/env";
 import { mentionCandidates } from "@codehaus-au/ask/internal/refs";
 import { terminalField } from "@codehaus-au/ask/internal/terminal";
-import { responseTimeoutMs } from "@codehaus-au/ask/internal/timeout";
+import { DEFAULT_RESPONSE_TIMEOUT_MS, timeoutSecondsToMs } from "@codehaus-au/ask/internal/timeout";
 import { TuiChat } from "./chat.ts";
 import { discoverSkills, skillSearchPaths, SkillResolutionError } from "@codehaus-au/ask/internal/skills";
 import { themeModes } from "./themes.ts";
@@ -16,21 +17,26 @@ Usage: ask-tui [--model <id>] [--base-url <url>] [--api-key <key>]
                [--system <text>] [--max-tokens <n>] [--temperature <n>]
                [--allow-insecure-http] [--skill <name>]... [--list-skills]
                [--context-window <tokens>] [--timeout <seconds>] [--theme <name>] [--no-mouse]
-Uses OPENAI_API_KEY, OPENAI_BASE_URL, ASK_MODEL and ASK_SYSTEM like ask.
-ASK_CONTEXT_WINDOW supplies the model's context capacity in tokens.
+               [--config <dir>] [--show-config]
+Configuration is shared with ask (lowest precedence first): ~/.config/ask/ (or
+$XDG_CONFIG_HOME/ask), --config <dir> or $ASK_CONFIG, the project's ask.json(c),
+its .ask/ directory, $ASK_CONFIG_CONTENT, ASK_* variables, then flags. TUI settings
+go in tui.json(c): theme, contextWindow, mouse. A project cannot choose the
+endpoint or key, or use {env:VAR}, until you run: ask /trust
+--show-config prints each setting and where it came from.
 One request per submission; no model tools, automatic retries or agent loop.
 Mention @files or @folders anywhere. Suggested updates require review and /apply.
 History is in memory for this TUI only. Ctrl+C copies a selection, otherwise exits.
 Ctrl+D always exits. /help lists commands.
 --skill selects instructions for this chat; repeat to compose skills.
 --list-skills lists discovered skills offline; no key or terminal required.
---context-window overrides ASK_CONTEXT_WINDOW (positive integer tokens).
+--context-window (ASK_CONTEXT_WINDOW, tui.contextWindow): capacity in tokens.
 It is never looked up. When set, the oldest history is dropped so each estimated
 request fits, and a message too large even without history is refused before
 sending. Without it, resent history is capped at about 32000 tokens.
---timeout overrides ASK_TIMEOUT; default 120 seconds per request, no retries.
---theme overrides ASK_THEME; default ask. Use /theme to preview and change themes.
---no-mouse leaves mouse selection to your terminal; /copy uses OSC52.
+--timeout (ASK_TIMEOUT, timeout): default 120 seconds per request, no retries.
+--theme (ASK_THEME, tui.theme): default ask. Use /theme to preview and change themes.
+--no-mouse (tui.mouse: false) leaves mouse selection to your terminal; /copy uses OSC52.
 `;
 
 async function main() {
@@ -42,14 +48,15 @@ async function main() {
     skill: { type: "string", multiple: true }, "list-skills": { type: "boolean" },
     "context-window": { type: "string" }, "no-mouse": { type: "boolean" },
     timeout: { type: "string" }, theme: { type: "string" },
+    config: { type: "string" }, "show-config": { type: "boolean" },
   } });
   if (values.help) { process.stdout.write(HELP); return; }
   if (!("Bun" in globalThis)) throw new Error("ask-tui requires Bun 1.3.14+; the existing ask CLI still runs on Node.");
   if (!process.execArgv.includes("--no-env-file") || process.execArgv.some((arg) => /^--env-file(?:=|$)/.test(arg))) {
     throw new Error("Bun's .env autoload must be disabled. Use ask-tui or pnpm tui; do not pass --env-file.");
   }
-  const config = fileURLToPath(new URL("./bunfig.toml", import.meta.url));
-  if (!process.execArgv.includes(`--config=${config}`)) {
+  const bunConfig = fileURLToPath(new URL("./bunfig.toml", import.meta.url));
+  if (!process.execArgv.includes(`--config=${bunConfig}`)) {
     throw new Error("Use ask-tui or pnpm tui to launch with Ask's trusted Bun configuration.");
   }
   const cwd = process.cwd();
@@ -63,41 +70,50 @@ async function main() {
     ].join("\n"));
     return;
   }
+  const loaded = await loadSettings({
+    cwd, configDir: values.config,
+    flags: flagLayer([
+      ["--model", values.model, ["model"]],
+      ["--system", values.system, ["system"]],
+      ["--max-tokens", values["max-tokens"], ["maxTokens"]],
+      ["--temperature", values.temperature, ["temperature"]],
+      ["--timeout", values.timeout, ["timeout"]],
+      ["--base-url", values["base-url"], ["endpoint", "url"]],
+      ["--api-key", values["api-key"], ["endpoint", "apiKey"]],
+      ["--theme", values.theme, ["tui", "theme"]],
+      ["--context-window", values["context-window"], ["tui", "contextWindow"]],
+      ["--no-mouse", values["no-mouse"] ? "false" : undefined, ["tui", "mouse"]],
+    ]),
+  });
+  if (values["show-config"]) { process.stdout.write(`${describeSettings(loaded)}\n`); return; }
   if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error("ask-tui requires an interactive terminal. Use ask for pipes and scripts.");
-  const here = path.dirname(fileURLToPath(import.meta.url));
-  const reports = await applyEnvFiles([
-    path.join(cwd, ".env"), path.resolve(here, "..", "..", ".env"), path.resolve(here, "..", ".env"),
-  ].map((file) => ({ file, allow: PROJECT_ENV_KEYS })));
-  if (!values["base-url"] && endpointFromEnvFile(reports)) {
-    throw new Error("Refusing an endpoint selected by an automatic .env file. Export OPENAI_BASE_URL or pass --base-url explicitly.");
-  }
-  const baseURL = values["base-url"] ?? process.env["OPENAI_BASE_URL"];
+  const { settings } = loaded;
+  const baseURL = settings.endpoint.url;
   if (isInsecureHttpEndpoint(baseURL) && !values["allow-insecure-http"]) {
     throw new Error("Refusing unencrypted remote HTTP; use HTTPS or explicitly pass --allow-insecure-http.");
   }
-  function numeric(name: "max-tokens" | "temperature" | "context-window") {
-    const raw = values[name] ?? (name === "context-window" ? process.env["ASK_CONTEXT_WINDOW"] : undefined);
-    if (raw === undefined) return undefined;
-    const number = Number(raw);
-    if (!raw.trim() || !Number.isFinite(number) ||
-      (name !== "temperature" ? !Number.isSafeInteger(number) || number <= 0 : number < 0 || number > 2)) {
-      const source = name === "context-window" && values[name] === undefined ? "ASK_CONTEXT_WINDOW" : `--${name}`;
-      throw new Error(`Invalid ${source}.`);
-    }
-    return number;
-  }
-  const model = values.model ?? process.env["ASK_MODEL"] ?? DEFAULT_MODEL;
-  const contextWindow = numeric("context-window");
-  const timeoutMs = responseTimeoutMs(values.timeout);
-  const theme = values.theme ?? process.env["ASK_THEME"] ?? "ask";
+  const model = settings.model ?? DEFAULT_MODEL;
+  const timeoutMs = settings.timeout === undefined ? DEFAULT_RESPONSE_TIMEOUT_MS : timeoutSecondsToMs(settings.timeout);
+  const theme = settings.tui.theme ?? "ask";
   themeModes(theme); // Validate before creating a client or loading the native UI.
+  const apiKey = settings.endpoint.apiKey;
+  if (!apiKey && !isLoopbackEndpoint(baseURL)) {
+    // .env files that earlier versions read: the working directory and install location.
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const legacy = await legacyEnvNotice([path.join(cwd, ".env"), path.resolve(here, "..", "..", ".env"), path.resolve(here, "..", ".env")]);
+    const pairing = loaded.notes.filter((note) => note.includes("endpoint.apiKey"));
+    throw new Error(`no API key: export OPENAI_API_KEY, set endpoint.apiKey in ${path.join(globalConfigDir(), "ask.json")}, or pass --api-key` +
+      pairing.map((note) => `\n${note}`).join("") + (legacy ? `\n${legacy}` : "") +
+      "\nRun ask-tui --show-config to see where each setting comes from.");
+  }
   const lifetime = new AbortController();
   const chat = new TuiChat(createClient({
-    apiKey: values["api-key"] ?? process.env["OPENAI_API_KEY"], baseURL, timeoutMs, maxRetries: 0, signal: lifetime.signal,
+    apiKey, baseURL, organization: settings.endpoint.organization, project: settings.endpoint.project,
+    timeoutMs, maxRetries: 0, signal: lifetime.signal,
   }), {
-    cwd, model, baseURL, system: values.system ?? process.env["ASK_SYSTEM"] ?? "",
-    maxTokens: numeric("max-tokens"), temperature: numeric("temperature"),
-    contextWindow,
+    cwd, model, baseURL, system: settings.system ?? "",
+    maxTokens: settings.maxTokens, temperature: settings.temperature,
+    contextWindow: settings.tui.contextWindow,
   });
   await chat.selectSkills(values.skill ?? []);
   // Never load the native UI from the existing Node entry point or offline help.
@@ -105,15 +121,14 @@ async function main() {
     import("@opentui/core"), import("./ui.ts"),
   ]);
   // The UI decides whether Ctrl+C copies a selection or exits.
-  const renderer = await createCliRenderer({ exitOnCtrlC: false, useMouse: !values["no-mouse"] });
+  const renderer = await createCliRenderer({ exitOnCtrlC: false, useMouse: settings.tui.mouse !== false });
   renderer.once("destroy", () => lifetime.abort());
   const stop = () => renderer.destroy();
   process.once("SIGTERM", stop);
   process.once("SIGHUP", stop);
   try {
     // Shown in the transcript: stderr would be drawn over (or under) the UI.
-    const notices = reports.flatMap((report) => report.ignored?.length
-      ? [`Ignored .env keys in ${terminalField(report.file)}: ${report.ignored.map(terminalField).join(", ")}`] : []);
+    const notices = loaded.notes.map((note) => note.charAt(0).toUpperCase() + note.slice(1));
     const ui = mountChatUI(renderer, chat, model, { theme, notices });
     void mentionCandidates(cwd).then(
       (index) => ui.setCandidates(index.paths, index.truncated),
@@ -130,6 +145,8 @@ async function main() {
 
 main().catch((error: unknown) => {
   const candidates = error instanceof SkillResolutionError ? error.candidates.map((name) => `\n  ${terminalField(name)}`).join("") : "";
-  process.stderr.write(`ask-tui: ${terminalField(error instanceof Error ? error.message : String(error))}${candidates}\n`);
+  // Escape each line: messages may span lines, but nothing else may control the terminal.
+  const message = (error instanceof Error ? error.message : String(error)).split("\n").map(terminalField).join("\n");
+  process.stderr.write(`ask-tui: ${message}${candidates}\n`);
   process.exitCode = 1;
 });

@@ -41,8 +41,8 @@
     "build": "tsc && cp src/bunfig.toml dist/src/bunfig.toml && chmod +x dist/src/launcher.js",
     "prepack": "pnpm build",
     "typecheck": "tsc --noEmit",
-    "test": "pnpm build && node --test dist/test/*.test.js",
-    "test:bun": "pnpm build && bun test ./test/bun",
+    "test": "pnpm build && node --import ./dist/test/isolate-config.js --test dist/test/*.test.js",
+    "test:bun": "pnpm build && bun test --preload ./test/isolate-config.ts ./test/bun",
     "prepublishOnly": "pnpm build"
   },
   "dependencies": {

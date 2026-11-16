@@ -9,7 +9,7 @@ for anything exploitable. Expect an acknowledgement within a few working days.
 
 `ask-tui` is built on `@codehaus-au/ask` and depends on the exact same version.
 Context collection, secret skipping, symlink handling, endpoint selection,
-restricted `.env` loading, the tool-free request type and terminal sanitising
+layered configuration (untrusted projects cannot choose the endpoint or use `{env:}`), the tool-free request type and terminal sanitising
 are the core package's code, so its
 [security policy](https://github.com/codehausau/ask/blob/main/packages/ask/SECURITY.md)
 applies here too. This document covers what the TUI adds.
@@ -68,8 +68,8 @@ search that skips empty and relative entries and any directory inside the workin
 directory), then spawns it without a shell, with `--no-env-file` and an absolute
 `--config=<bundled bunfig.toml>` path. This skips automatic repository/global
 runtime configuration and disables runtime dependency
-auto-installation. Repository `.env*` values cannot masquerade as trusted exports
-before Ask enforces its allowlist. Use `ask-tui` or `pnpm tui`: checks inside a Bun
+auto-installation. Bun's own `.env` loading is disabled, so a repository's `.env*`
+files are never read, by Bun or by Ask. Use `ask-tui` or `pnpm tui`: checks inside a Bun
 entry point alone cannot prevent a hook from executing before that entry point.
 Direct development invocations require both `--no-env-file` and
 `--config=<absolute path to src/bunfig.toml>`; never supply additional preloads

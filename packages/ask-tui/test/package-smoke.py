@@ -65,6 +65,15 @@ def main():
         env = {key: value for key, value in os.environ.items()
                if not key.startswith(("ASK_", "OPENAI_", "BUN_")) and key not in ("NODE_OPTIONS", "NO_COLOR")}
         env["TERM"] = "xterm-256color"
+        # Never read the developer's own config. The repository .env must be ignored;
+        # the user's ask.json (owner-only) is what supplies settings.
+        config = Path(directory) / "config-home"
+        (config / "ask").mkdir(parents=True)
+        (config / "ask" / "ask.json").write_text('{ "system": "config-system-marker" }')
+        (config / "ask" / "ask.json").chmod(0o600)
+        env["ASK_STATE_DIR"] = str(Path(directory) / "state")
+        env["XDG_CONFIG_HOME"] = str(config)
+        (cwd / ".env").write_text("ASK_SYSTEM=repository-system-marker\nOPENAI_API_KEY=repository-key\n")
         output = bytearray()
         process = None
         selector = selectors.DefaultSelector()
@@ -103,6 +112,9 @@ def main():
             wait_for(lambda: target.read_text() == "const x = 2;\n", "approved write")
             assert len(requests) == 1, "local approval issued another model request"
             assert "const x = 1;" in requests[0]["messages"][-1]["content"]
+            system = requests[0]["messages"][0]["content"]
+            assert "config-system-marker" in system, "config file was not applied"
+            assert "repository-system-marker" not in system, "repository .env was read"
             assert not (cwd / "preload-executed").exists(), "repository preload executed"
             # Wait for the local write to finish updating the UI before quitting.
             wait_for(lambda: b"Applied updates" in output, "write confirmation")

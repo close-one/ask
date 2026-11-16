@@ -14,7 +14,7 @@
 #   -<TAB>               flags
 #   --token-field <TAB>  the two valid values
 #   -m <TAB>             models from $ASK_MODELS, if set
-#   -f / --system-file   plain paths
+#   -f / --system-file / --config   plain paths
 #
 # Nothing is completed for the free-text question, so TAB stays out of the way
 # while you type the actual prompt.
@@ -22,7 +22,7 @@
 # Set ASK_FZF=0 to force plain completion even when fzf is installed.
 
 # Kept in sync with src/options.ts by test/completion.test.ts.
-_ASK_FLAGS="--all-matches --allow-insecure-http --api-key --apply --base-url --compact --create \
+_ASK_FLAGS="--all-matches --allow-insecure-http --api-key --apply --base-url --compact --config --create \
 --diff --dry-run --file \
 --help --install-completion \
 --include-secrets --json --max-file-bytes --max-files --max-tokens \
@@ -30,14 +30,14 @@ _ASK_FLAGS="--all-matches --allow-insecure-http --api-key --apply --base-url --c
 --no-next \
 --no-session \
 --quiet --raw --reset \
---session \
+--session --show-config \
 --force --session-max-tokens --show-context --show-session --skill --switch \
 --system --write \
 --system-file \
---temperature --timeout --token-field --version -V -f -h -m -q -s"
+--temperature --timeout --token-field --trust --untrust --version -V -f -h -m -q -s"
 
 # Chat-style verbs, accepted as the first word after `ask`.
-_ASK_VERBS="/compact /create /diff /new /reset /session /sessions /skills /switch /write"
+_ASK_VERBS="/compact /config /create /diff /new /reset /session /sessions /skills /switch /trust /untrust /write"
 
 # Most candidates offered for a recursive search, to keep TAB responsive.
 _ASK_SEARCH_LIMIT=${_ASK_SEARCH_LIMIT:-50}
@@ -214,7 +214,7 @@ _ask_complete() {
 
   # Value of the flag that precedes the cursor.
   case $prev in
-    -f | --file | --system-file)
+    -f | --file | --system-file | --config)
       if _ask_use_fzf; then
         if _ask_pick "$cur" ""; then _ask_quote_completions; return 0; fi
       fi

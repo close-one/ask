@@ -38,13 +38,16 @@ import {
   type WriteSnapshot,
 } from "./safe-write.ts";
 import {
-  applyEnvFiles,
-  describeEnvFiles,
-  endpointFromEnvFile,
-  PROJECT_ENV_KEYS,
-  type EnvCandidate,
-  type EnvFileReport,
-} from "./env.ts";
+  ConfigFileError,
+  describeSettings,
+  flagLayer,
+  globalConfigDir,
+  loadSettings,
+  trustProject,
+  untrustProject,
+  type LoadedSettings,
+} from "./config.ts";
+import { legacyEnvNotice } from "./env.ts";
 import { applyToRc, findExecutable, installInstructions, pickerStatus } from "./install.ts";
 import {
   discoverSkills,
@@ -57,7 +60,7 @@ import {
   type LoadedSkill,
 } from "./skills.ts";
 import { startSpinner } from "./spinner.ts";
-import { responseTimeoutMs } from "./timeout.ts";
+import { DEFAULT_RESPONSE_TIMEOUT_MS, timeoutSecondsToMs } from "./timeout.ts";
 import {
   checkCreateRequest,
   checkCreateResponse,
@@ -140,6 +143,9 @@ Sessions
                          write a new file; any context is allowed
   ask /skills [term]     list available skills, no API call
   ask /compact           summarise the thread into notes, keeping files attached
+  ask /config            print each setting and where it came from (--show-config)
+  ask /trust             let this project's config choose the endpoint and use {env:}
+  ask /untrust           withdraw that trust
   --no-session           one-shot, ignoring and not touching the thread
 
 References
@@ -163,6 +169,8 @@ Options
       --allow-insecure-http
                             allow unencrypted HTTP to non-loopback endpoints
       --api-key <key>       API key (env OPENAI_API_KEY)
+      --config <dir>        add a config directory (env ASK_CONFIG); see Configuration
+      --show-config         print each setting and where it came from, then exit
   -f, --file <path>         attach a path explicitly; repeatable
       --max-tokens <n>      cap the answer length
       --temperature <n>     sampling temperature (omitted unless set)
@@ -201,6 +209,13 @@ Options
       --no-color            no colour in status output (also NO_COLOR=1)
       --raw                 skip Markdown rendering (TTY controls still sanitised)
       --no-next             do not suggest a follow-up command
+
+Configuration (lowest precedence first): ~/.config/ask/ (or $XDG_CONFIG_HOME/ask),
+--config <dir> or $ASK_CONFIG, the project's ask.json(c), its .ask/ directory,
+$ASK_CONFIG_CONTENT, ASK_* variables, then flags. Each directory may hold
+ask.json(c), cli.json(c) and tui.json(c). A project cannot choose the endpoint or
+key, or use {env:VAR}, until you run: ask /trust   (undo with ask /untrust).
+.env files are never read.
 `;
 
 class UsageError extends Error {}
@@ -232,31 +247,8 @@ async function readVersion(): Promise<string> {
   return "unknown";
 }
 
-/** All automatic .env sources are restricted, including install-location fallbacks. */
-function envCandidates(): EnvCandidate[] {
-  return [
-    path.join(process.cwd(), ".env"),
-    path.resolve(HERE, "..", "..", ".env"),
-    path.resolve(HERE, "..", ".env"),
-  ].map((file) => ({ file, allow: PROJECT_ENV_KEYS }));
-}
-
-/** Require an explicitly selected, safe transport before either path builds a client. */
-function checkEndpoint(
-  reports: readonly EnvFileReport[],
-  baseURL: string | undefined,
-  fromFlag: boolean,
-  allowInsecureHttp: boolean,
-): void {
-  const file = fromFlag ? null : endpointFromEnvFile(reports);
-  if (file !== null) {
-    throw new ConfigError(
-      `OPENAI_BASE_URL was loaded from ${terminalField(file)}; refusing to send credentials or context ` +
-        "to an endpoint selected by an automatic .env file.\n" +
-        "Pass --base-url <url> or export OPENAI_BASE_URL in your shell to select the endpoint. " +
-        "Providing an API key does not confirm the destination.",
-    );
-  }
+/** Refuse plain HTTP to a remote endpoint unless explicitly allowed. */
+function checkEndpoint(baseURL: string | undefined, allowInsecureHttp: boolean): void {
   if (isInsecureHttpEndpoint(baseURL) && !allowInsecureHttp) {
     throw new ConfigError(
       "refusing unencrypted HTTP to a non-loopback endpoint: credentials and context " +
@@ -264,6 +256,21 @@ function checkEndpoint(
         "Use an HTTPS endpoint, or pass --allow-insecure-http to explicitly allow this request.",
     );
   }
+}
+
+/** Say where a key can go, and what is no longer read, so a missing key is not a dead end. */
+async function missingKeyError(loaded: LoadedSettings): Promise<ConfigError> {
+  // .env files that earlier versions read: the working directory and install location.
+  const legacy = await legacyEnvNotice([
+    path.join(process.cwd(), ".env"), path.resolve(HERE, "..", "..", ".env"), path.resolve(HERE, "..", ".env"),
+  ]);
+  const pairing = loaded.notes.filter((note) => note.includes("endpoint.apiKey"));
+  return new ConfigError(
+    "no API key: export OPENAI_API_KEY, set endpoint.apiKey in " +
+      `${terminalField(path.join(globalConfigDir(), "ask.json"))}, or pass --api-key` +
+      pairing.map((note) => `\n${note}`).join("") + (legacy ? `\n${legacy}` : "") +
+      "\nRun ask --show-config to see where each setting comes from.",
+  );
 }
 
 function numberOption(raw: string | undefined, name: string): number | undefined {
@@ -650,15 +657,55 @@ async function main(argv: string[]): Promise<number> {
     return installCompletion(bool("apply"));
   }
 
-  const envReports = await applyEnvFiles(envCandidates());
-  for (const report of envReports) {
-    if (report.ignored && report.ignored.length > 0 && !bool("quiet")) {
-      status.note(
-        `-- ignored ${report.ignored.join(", ")} from ${report.file} ` +
-          "(automatic .env files may only set endpoint, key, organisation, project and model)",
-      );
+  if (bool("trust") || bool("untrust")) {
+    try {
+      if (bool("untrust")) {
+        const root = await untrustProject(process.cwd());
+        process.stdout.write(root ? `No longer trusting ${terminalField(root)}\n` : "This project was not trusted.\n");
+        return 0;
+      }
+      const trusted = await trustProject(process.cwd());
+      process.stdout.write([
+        `Trusted ${terminalField(trusted.root)}:`, ...trusted.files.map((file) => `  ${terminalField(file)}`),
+        ...(trusted.unlocks.length ? ["Now allowed:", ...trusted.unlocks.map((item) => `  ${terminalField(item)}`)] : []),
+        "A change to these files needs ask /trust again.", "",
+      ].join("\n"));
+      return 0;
+    } catch (error) {
+      throw new ConfigError(error instanceof Error ? error.message : String(error));
     }
   }
+
+  let loaded: LoadedSettings;
+  try {
+    loaded = await loadSettings({
+      configDir: flag("config"),
+      flags: flagLayer([
+        ["--model", flag("model"), ["model"]],
+        ["--system", flag("system"), ["system"]],
+        ["--temperature", flag("temperature"), ["temperature"]],
+        ["--max-tokens", flag("max-tokens"), ["maxTokens"]],
+        ["--timeout", flag("timeout"), ["timeout"]],
+        ["--base-url", flag("base-url"), ["endpoint", "url"]],
+        ["--api-key", flag("api-key"), ["endpoint", "apiKey"]],
+        ["--session-max-tokens", flag("session-max-tokens"), ["cli", "sessionMaxTokens"]],
+        ["--no-next", bool("no-next") ? "false" : undefined, ["cli", "next"]],
+      ]),
+    });
+  } catch (error) {
+    if (error instanceof ConfigFileError) throw new ConfigError(error.message);
+    throw error;
+  }
+  if (bool("show-config")) {
+    process.stdout.write(`${describeSettings(loaded)}\n`);
+    return 0;
+  }
+  for (const note of loaded.notes) {
+    // A refused file can hold credentials someone else edited: never silenced.
+    if (!bool("quiet") || note.startsWith("not reading")) status.note(`-- ${note}`);
+  }
+  const settings = loaded.settings;
+  const timeoutMs = settings.timeout === undefined ? DEFAULT_RESPONSE_TIMEOUT_MS : timeoutSecondsToMs(settings.timeout);
 
   const createPath = flag("create");
   const skillTerms = (values["skill"] as string[] | undefined) ?? [];
@@ -792,13 +839,13 @@ async function main(argv: string[]): Promise<number> {
       return 0;
     }
 
-    const compactBaseURL = flag("base-url") ?? process.env["OPENAI_BASE_URL"];
+    const compactBaseURL = settings.endpoint.url;
     const compactRequest = buildRequest({
       prompt: buildCompactionPrompt(existing),
-      model: flag("model") ?? process.env["ASK_MODEL"] ?? DEFAULT_MODEL,
+      model: settings.model ?? DEFAULT_MODEL,
       system: COMPACT_SYSTEM,
-      maxTokens: numberOption(flag("max-tokens"), "max-tokens") ?? 800,
-      temperature: numberOption(flag("temperature"), "temperature"),
+      maxTokens: settings.maxTokens ?? 800,
+      temperature: settings.temperature,
       tokenField: tokenFieldOption(flag("token-field")),
       baseURL: compactBaseURL,
     });
@@ -808,13 +855,13 @@ async function main(argv: string[]): Promise<number> {
       return 0;
     }
 
-    checkEndpoint(envReports, compactBaseURL, flag("base-url") !== undefined, bool("allow-insecure-http"));
+    checkEndpoint(compactBaseURL, bool("allow-insecure-http"));
+    if (!settings.endpoint.apiKey && !isLoopbackEndpoint(compactBaseURL)) throw await missingKeyError(loaded);
 
     const before = sessionTokens(existing);
     const compactClient = createClient({
-      apiKey: flag("api-key") ?? process.env["OPENAI_API_KEY"],
-      baseURL: compactBaseURL,
-      timeoutMs: responseTimeoutMs(flag("timeout")),
+      apiKey: settings.endpoint.apiKey, baseURL: compactBaseURL,
+      organization: settings.endpoint.organization, project: settings.endpoint.project, timeoutMs,
     });
     const compactSpinner = startSpinner({
       label: `compacting ${existing.turns.length} turn(s)`,
@@ -925,7 +972,7 @@ async function main(argv: string[]): Promise<number> {
   const systemFile = flag("system-file");
   const explicitSystem = systemFile
     ? await readFile(systemFile, "utf8")
-    : (flag("system") ?? process.env["ASK_SYSTEM"]);
+    : settings.system;
   // Write mode needs "output the whole file and nothing else"; an explicitly
   // chosen system prompt still wins.
   const system =
@@ -1005,9 +1052,7 @@ async function main(argv: string[]): Promise<number> {
   // the one thing an implicit session must not do.
   let history = session;
   if (session) {
-    const budget =
-      numberOption(flag("session-max-tokens"), "session-max-tokens") ??
-      DEFAULT_SESSION_MAX_TOKENS;
+    const budget = settings.cli.sessionMaxTokens ?? DEFAULT_SESSION_MAX_TOKENS;
     const pruned = pruneSession(session, budget, estimateTokens(prompt));
     history = pruned.session;
     if (pruned.dropped > 0 && !bool("quiet")) {
@@ -1015,14 +1060,14 @@ async function main(argv: string[]): Promise<number> {
     }
   }
 
-  const baseURL = flag("base-url") ?? process.env["OPENAI_BASE_URL"];
+  const baseURL = settings.endpoint.url;
   const request = buildRequest({
     prompt,
-    model: flag("model") ?? process.env["ASK_MODEL"] ?? DEFAULT_MODEL,
+    model: settings.model ?? DEFAULT_MODEL,
     system: systemWithSkills,
     history: sessionMessages(history),
-    maxTokens: numberOption(flag("max-tokens"), "max-tokens"),
-    temperature: numberOption(flag("temperature"), "temperature"),
+    maxTokens: settings.maxTokens,
+    temperature: settings.temperature,
     tokenField: tokenFieldOption(flag("token-field")),
     baseURL,
   });
@@ -1032,19 +1077,14 @@ async function main(argv: string[]): Promise<number> {
     return 0;
   }
 
-  checkEndpoint(envReports, baseURL, flag("base-url") !== undefined, bool("allow-insecure-http"));
+  checkEndpoint(baseURL, bool("allow-insecure-http"));
 
-  const apiKey = flag("api-key") ?? process.env["OPENAI_API_KEY"];
-  if (!apiKey && !isLoopbackEndpoint(baseURL)) {
-    // Say what was read, so a .env that exists but was not picked up is
-    // obvious rather than a dead end.
-    throw new ConfigError(
-      "no API key: set OPENAI_API_KEY, put it in .env, or pass --api-key\n" +
-        describeEnvFiles(envReports, "OPENAI_API_KEY"),
-    );
-  }
+  const apiKey = settings.endpoint.apiKey;
+  if (!apiKey && !isLoopbackEndpoint(baseURL)) throw await missingKeyError(loaded);
 
-  const client = createClient({ apiKey, baseURL, timeoutMs: responseTimeoutMs(flag("timeout")) });
+  const client = createClient({
+    apiKey, baseURL, organization: settings.endpoint.organization, project: settings.endpoint.project, timeoutMs,
+  });
 
   // A local model can take a while; show progress, but only for a human at a
   // terminal, and always erase the line afterwards.
@@ -1258,7 +1298,7 @@ async function main(argv: string[]): Promise<number> {
   // What to do next. Computed here rather than asked of the model: every
   // suggestion is checked against the filesystem, so it can be unhelpful but
   // never wrong.
-  if (!bool("quiet") && !bool("json") && !bool("no-next") && process.env["ASK_NEXT"] !== "0") {
+  if (!bool("quiet") && !bool("json") && settings.cli.next !== false) {
     const attached = context.blocks.map((block) => block.path);
     const mentioned = await mentionedButMissing(result.text, attached);
     const suggestions = suggestNext({

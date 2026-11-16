@@ -22,6 +22,7 @@ will *not* do.
 | Nothing is written to your source tree unless you authorize it | `/write` and `/create` explicitly name targets; session storage is separate |
 | Git is the CLI's only subprocess executable | `src/git.ts` centralises hardened metadata/diff calls; fsmonitor, optional index writes, lazy fetches and configured diff/filter execution are disabled |
 | Credentials are not attached by accident | `.env*`, `*.pem`, `*.key`, `*.p12`, `id_rsa`, `credentials.json` and similar are skipped even when named explicitly, unless `--include-secrets` |
+| A repository cannot choose your endpoint or key | A project's `ask.json` and `.ask/` cannot set `endpoint` or use `{env:}` until `ask /trust` records their exact contents; `.env` files are never read |
 | You can see the payload before sending | `--dry-run` prints the exact JSON body; `--show-context` lists attachments and never calls the API |
 
 ### What it does not protect against
@@ -213,32 +214,45 @@ A truncated or empty response is refused as above.
 
 ## Key handling
 
-Automatically discovered `.env` files are restricted to `OPENAI_API_KEY`,
-`OPENAI_BASE_URL`, `OPENAI_ORG_ID`, `OPENAI_PROJECT_ID`, and `ASK_MODEL`, including
-files found relative to the install location. They cannot inject arbitrary
-subprocess environment variables or redirect session/skill storage. Duplicate
-canonical paths are loaded once; when loader candidates have different policies,
-their allowlists are intersected before any values are applied. Ignored keys are
-reported by name only. Explicitly exported shell variables retain precedence.
+Configuration is layered JSON (see the README's Configuration section): the
+global `~/.config/ask/`, an optional `--config` directory or `$ASK_CONFIG`, the
+project's `ask.json(c)` and `.ask/`, `$ASK_CONFIG_CONTENT`, single-setting
+`ASK_*` variables, then flags. `.env` files are never read; an old one is only
+parsed, when no key is found, to say which of its settings are no longer used.
 
-Before a normal request or `/compact`, the CLI refuses an endpoint sourced from
-an automatic `.env` file unless `--base-url` explicitly selects the destination.
-An exported `OPENAI_BASE_URL` also takes precedence over file values. The refusal
-applies whether the file supplies a key, the key comes from the shell or CLI,
-or a local endpoint needs no key: choosing a key does not authorize sending code
-or history to a repository-selected destination. Offline previews do not send
-requests and remain available.
+**Project layers are untrusted by default.** They are written by whoever wrote
+the repository, so until the user runs `ask /trust` they cannot set `endpoint`
+(URL, key, organisation, project): otherwise a cloned repository could send your
+attachments, history and key to its own server, or supply its own key so your
+requests go to an account it can read. Nor can they use `{env:NAME}`, which
+would copy any secret in your environment into a request. Ignored settings are
+named on stderr (in the TUI, in the transcript). Trust is stored in the state
+directory as a SHA-256 of the project's config file paths and contents, so a
+modified or added file needs trusting again. Project layers can still set the
+model, system prompt and similar preferences; like attached files, those are
+content the repository chose, and `--show-config` shows where each came from.
 
-Both request paths also refuse a non-loopback `http://` endpoint before creating
-the API client. HTTPS and recognised loopback HTTP endpoints are allowed.
+**Keys stay with their endpoint.** If a layer changes `endpoint.url` without
+setting `apiKey` (or organisation/project), the lower layer's values are dropped
+rather than sent to the new URL. A `--base-url` flag is explicit and keeps the
+effective key. `OPENAI_*` exports are only defaults, below every config file,
+because other tools use the same names.
+
+**Files must be private to you.** Config files that every user can write, or
+that another user (other than root) owns, are not read, and the refusal is
+always reported, even with `--quiet`. Group-writable files are accepted, as
+common umasks create them for the owner's private group. Wrong types are errors
+naming the file and setting; unknown settings are reported and ignored.
+`--show-config` never prints API keys.
+
+Both request paths refuse a non-loopback `http://` endpoint before creating the
+API client. HTTPS and recognised loopback HTTP endpoints are allowed.
 `--allow-insecure-http` explicitly opts a single invocation into cleartext
-transport; it does not bypass the `.env` endpoint-source check. Offline previews
-remain available for inspecting requests without sending them.
+transport, and is not a config setting. Offline previews remain available for inspecting requests without
+sending them.
 
-`OPENAI_API_KEY` is read from the environment or a local `.env`, which is
-gitignored. The key is only ever sent to the configured endpoint as an
-`Authorization` header, is never logged, and never appears in `--dry-run` or
-`--json` output.
+The key is only ever sent to the configured endpoint as an `Authorization`
+header, is never logged, and never appears in `--dry-run` or `--json` output.
 
 ## Supply chain
 

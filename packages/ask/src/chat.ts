@@ -58,6 +58,8 @@ export interface ClientOptions {
   /** Optional only for loopback endpoints, which ignore it. */
   apiKey: string | undefined;
   readonly baseURL?: string | undefined;
+  readonly organization?: string | undefined;
+  readonly project?: string | undefined;
   readonly timeoutMs?: number;
   readonly maxRetries?: number;
   /** A TUI lifetime signal cancels an in-flight request on exit. */
@@ -123,6 +125,8 @@ export function isInsecureHttpEndpoint(baseURL: string | undefined): boolean {
 export function createClient({
   apiKey,
   baseURL,
+  organization,
+  project,
   timeoutMs = DEFAULT_RESPONSE_TIMEOUT_MS,
   maxRetries = 2,
   signal,
@@ -133,7 +137,13 @@ export function createClient({
   if (!apiKey) {
     throw new Error("no API key: set OPENAI_API_KEY (or pass --api-key)");
   }
-  const client = new OpenAI({ apiKey, baseURL, timeout: timeoutMs, maxRetries });
+  // Pass every connection value explicitly: the SDK would otherwise read
+  // OPENAI_* variables itself, bypassing the configuration's precedence.
+  const client = new OpenAI({
+    apiKey, baseURL: baseURL ?? "https://api.openai.com/v1",
+    organization: organization ?? null, project: project ?? null,
+    timeout: timeoutMs, maxRetries,
+  });
   // Narrow the SDK down to the one call we make, so nothing else is reachable.
   return {
     chat: { completions: { create: (body) => client.chat.completions.create(body, { signal }) } },

@@ -38,7 +38,7 @@ The Node `ask-tui` launcher starts Bun with `--no-env-file` and an explicit,
 bundled runtime configuration. Repository `bunfig.toml` preload hooks are never
 loaded, automatic global runtime configuration is skipped, and dependency auto-installation
 is disabled. Use `ask-tui` or `pnpm tui` so these protections take effect before
-any Bun code runs; only Ask's restricted `.env` loader runs.
+any Bun code runs. Bun never loads a `.env` itself.
 
 ```bash
 pnpm install
@@ -48,9 +48,20 @@ ask-tui                         # Bun must be on PATH
 ask-tui --model gpt-4o-mini
 ```
 
-Endpoint/key configuration and restricted `.env` loading follow the CLI's rules.
-Use `--base-url` or an exported `OPENAI_BASE_URL` to select the endpoint; an
-automatic `.env` cannot select it. Run `ask-tui --help` for supported flags.
+Configuration is shared with `ask`: layered JSON in `~/.config/ask/`, an optional
+`--config <dir>`, the project's `ask.json` and `.ask/`, `$ASK_CONFIG_CONTENT`,
+`ASK_*` variables and flags. TUI settings go in `tui.json` (or `tui.jsonc`):
+
+```jsonc
+// ~/.config/ask/tui.jsonc
+{ "theme": "dracula", "contextWindow": 32768, "mouse": true }
+```
+
+A project cannot choose the endpoint or key until you run `ask /trust`, and
+`.env` files are never read. See the `ask`
+[configuration notes](https://github.com/codehausau/ask/tree/main/packages/ask#configuration);
+`ask-tui --show-config` shows every setting and where it came from.
+Run `ask-tui --help` for supported flags.
 
 ### Chat, attachments and suggested edits
 
@@ -183,8 +194,8 @@ pnpm tui --theme high-contrast-light
 ```
 
 `--theme` overrides `ASK_THEME`; without either, the theme is `ask`. Unknown or
-empty names are rejected before starting the UI. Export `ASK_THEME` in your
-shell; it is not loaded from automatic `.env` files. `/theme` can override the
+empty names are rejected before starting the UI. Set `ASK_THEME` in your shell
+or as `theme` in `tui.json`. `/theme` can override the
 starting theme for the rest of the current run without changing the environment.
 
 Run `/theme` to open a searchable theme picker. Type a name
@@ -254,8 +265,8 @@ pnpm tui --context-window 32768
 ```
 
 The flag overrides `ASK_CONTEXT_WINDOW`; both require a positive integer token
-count. Export the variable in your shell (it is not loaded from automatic `.env`
-files). With a capacity, the footer shows usage such as `1.2K tokens (3.7%)`,
+count. Export the variable or set `contextWindow` in `tui.json`.
+With a capacity, the footer shows usage such as `1.2K tokens (3.7%)`,
 and the sidebar shows the exact count, capacity and percentage. Percentages use
 the last response's input plus output, not cumulative session totals.
 Without either setting the sidebar shows an unknown window limit and the footer
@@ -282,7 +293,7 @@ export ASK_TIMEOUT=300
 
 The flag overrides the environment variable; the default is 120 seconds per
 request attempt. Positive fractional seconds are supported (millisecond
-precision). `ASK_TIMEOUT` is not loaded from automatic `.env` files. Retry
+precision). It can also be set as `timeout` in `ask.json`. Retry
 behavior is unchanged: the TUI never retries automatically; the Node CLI allows
 up to two SDK retries, so total elapsed time can exceed the timeout.
 

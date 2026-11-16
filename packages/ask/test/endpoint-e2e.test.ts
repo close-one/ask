@@ -1,7 +1,7 @@
 // Verify the destination guard on the wire, using fake keys and local servers.
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -18,8 +18,8 @@ const MODES = [
   { name: "compact", args: ["--session", "review", "/compact"] },
 ];
 
-// Isolate install-location .env files too: no developer credentials/config may
-// leak into the key-provenance scenarios or reach even our local stub servers.
+// Run from a copied install so no developer files near the checkout can leak into
+// the key-provenance scenarios; the test setup also isolates XDG_CONFIG_HOME.
 before(async () => {
   install = await mkdtemp(path.join(tmpdir(), "ask-endpoint-install-"));
   const entryDir = path.join(install, "dist", "src");
@@ -85,51 +85,81 @@ function runCli(args: string[], cwd: string, env: NodeJS.ProcessEnv) {
   });
 }
 
-for (const mode of MODES) {
-  test(`${mode.name}: a file-selected endpoint is refused for every key source`, async (t) => {
-    const project = await endpoint(t);
-    const scenarios = [
-      { name: "exported key", fileKey: "", shellKey: "private-shell-key", args: [] },
-      { name: "CLI key", fileKey: "", shellKey: undefined, args: ["--api-key", "private-cli-key"] },
-      { name: "dummy file key and CLI override", fileKey: "OPENAI_API_KEY=dummy\n", shellKey: undefined, args: ["--api-key", "private-cli-key"] },
-      { name: "file key", fileKey: "OPENAI_API_KEY=private-file-key\n", shellKey: undefined, args: [] },
-      { name: "key-free local endpoint", fileKey: "", shellKey: undefined, args: [] },
-    ];
-    for (const scenario of scenarios) {
-      const { cwd, env, session } = await workspace(t, `OPENAI_BASE_URL=${project.url}\n${scenario.fileKey}`);
-      if (scenario.shellKey !== undefined) env["OPENAI_API_KEY"] = scenario.shellKey;
-      const before = await readFile(session, "utf8");
-      const result = await runCli([...mode.args, ...scenario.args], cwd, env);
-      assert.equal(result.code, 2, `${scenario.name}: ${result.stderr}`);
-      assert.match(result.stderr, /refusing to send credentials or context/);
-      assert.match(result.stderr, /--base-url/);
-      assert.match(result.stderr, /export OPENAI_BASE_URL/);
-      assert.doesNotMatch(result.stderr, /private-|dummy|127\.0\.0\.1/);
-      assert.equal(project.requests.length, 0, scenario.name);
-      assert.equal(await readFile(session, "utf8"), before, "refusal must not compact the thread");
-    }
-  });
+/** A user ask.json (owner-only) under its own XDG_CONFIG_HOME. */
+async function userConfig(t: TestContext, env: NodeJS.ProcessEnv, config: unknown) {
+  const xdg = await mkdtemp(path.join(tmpdir(), "ask-endpoint-config-"));
+  t.after(() => rm(xdg, { recursive: true, force: true }));
+  await mkdir(path.join(xdg, "ask"));
+  await writeFile(path.join(xdg, "ask", "ask.json"), JSON.stringify(config));
+  await chmod(path.join(xdg, "ask", "ask.json"), 0o600);
+  env["XDG_CONFIG_HOME"] = xdg;
+}
 
-  test(`${mode.name}: an explicit endpoint overrides the file and uses the effective key`, async (t) => {
+for (const mode of MODES) {
+  test(`${mode.name}: a repository .env can choose neither the endpoint nor the key`, async (t) => {
     const project = await endpoint(t);
     const chosen = await endpoint(t);
-    for (const source of ["flag", "shell", "same-url-flag"]) {
-      const { cwd, env } = await workspace(t, `OPENAI_BASE_URL=${project.url}\nOPENAI_API_KEY=dummy\n`);
-      const url = source === "same-url-flag" ? project.url : chosen.url;
-      const args = [...mode.args, "--api-key", "private-cli-key"];
-      if (source === "shell") env["OPENAI_BASE_URL"] = url;
-      else args.push("--base-url", url);
-      const result = await runCli(args, cwd, env);
+    const { cwd, env, session } = await workspace(t, `OPENAI_BASE_URL=${project.url}\nOPENAI_API_KEY=private-file-key\n`);
+    const before = await readFile(session, "utf8");
+
+    // Nothing else configured: no request anywhere, and the error explains the change.
+    const refused = await runCli(mode.args, cwd, env);
+    assert.equal(refused.code, 2, refused.stderr);
+    assert.match(refused.stderr, /no API key/);
+    assert.match(refused.stderr, /no longer reads \.env files/);
+    assert.doesNotMatch(refused.stderr, /private-|127\.0\.0\.1/);
+    assert.equal(project.requests.length, 0);
+    assert.equal(await readFile(session, "utf8"), before, "refusal must not compact the thread");
+
+    // The user's own choices are used; the file's key and endpoint never are.
+    for (const source of ["flag", "shell"]) {
+      const args = [...mode.args];
+      const runEnv: NodeJS.ProcessEnv = { ...env, OPENAI_API_KEY: "private-shell-key" };
+      if (source === "shell") runEnv["OPENAI_BASE_URL"] = chosen.url;
+      else args.push("--base-url", chosen.url);
+      const result = await runCli(args, cwd, runEnv);
       assert.equal(result.code, 0, result.stderr);
-      const received = (source === "same-url-flag" ? project : chosen).requests.at(-1);
-      assert.equal(received?.authorization, "Bearer private-cli-key");
-      assert.ok(received?.body.includes(mode.name === "normal" ? "private-context-marker" : "private-history-marker"));
-      assert.equal(project.requests.length, source === "same-url-flag" ? 1 : 0);
+      assert.equal(chosen.requests.at(-1)?.authorization, "Bearer private-shell-key");
+      assert.ok(chosen.requests.at(-1)?.body.includes(mode.name === "normal" ? "private-context-marker" : "private-history-marker"));
     }
-    assert.equal(chosen.requests.length, 2);
+    assert.equal(project.requests.length, 0);
   });
 
-  test(`${mode.name}: offline previews remain available for a file-selected endpoint`, async (t) => {
+  test(`${mode.name}: the user's config file supplies the endpoint and key`, async (t) => {
+    const project = await endpoint(t);
+    const chosen = await endpoint(t);
+    // A fresh thread each time: a compacted thread has nothing left to compact.
+    for (const [args, expected] of [[[], "private-config-key"], [["--api-key", "private-cli-key"], "private-cli-key"]] as const) {
+      const { cwd, env } = await workspace(t, `OPENAI_BASE_URL=${project.url}\nOPENAI_API_KEY=private-file-key\n`);
+      await userConfig(t, env, { endpoint: { url: chosen.url, apiKey: "private-config-key" } });
+      const result = await runCli([...mode.args, ...args], cwd, env);
+      assert.equal(result.code, 0, result.stderr);
+      // An explicit flag still wins over the config file.
+      assert.equal(chosen.requests.at(-1)?.authorization, `Bearer ${expected}`);
+    }
+    assert.equal(chosen.requests.length, 2);
+    assert.equal(project.requests.length, 0);
+  });
+
+  test(`${mode.name}: an untrusted project ask.json cannot choose the endpoint; after /trust it can`, async (t) => {
+    const project = await endpoint(t);
+    const { cwd, env, session } = await workspace(t, "");
+    await writeFile(path.join(cwd, "ask.json"), JSON.stringify({ endpoint: { url: project.url, apiKey: "private-project-key" } }));
+    const before = await readFile(session, "utf8");
+    const refused = await runCli(mode.args, cwd, env);
+    assert.equal(refused.code, 2, refused.stderr);
+    assert.match(refused.stderr, /ignored endpoint/);
+    assert.match(refused.stderr, /no API key/);
+    assert.equal(project.requests.length, 0);
+    assert.equal(await readFile(session, "utf8"), before);
+
+    assert.equal((await runCli(["/trust"], cwd, env)).code, 0);
+    const result = await runCli(mode.args, cwd, env);
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(project.requests.at(-1)?.authorization, "Bearer private-project-key");
+  });
+
+  test(`${mode.name}: offline previews never send, whatever a repository .env says`, async (t) => {
     const project = await endpoint(t);
     const { cwd, env, session } = await workspace(t, `OPENAI_BASE_URL=${project.url}\n`);
     const before = await readFile(session, "utf8");
@@ -194,14 +224,14 @@ for (const mode of MODES) {
     }
   });
 
-  test(`${mode.name}: the HTTP override cannot authorize an endpoint from .env`, async (t) => {
+  test(`${mode.name}: --allow-insecure-http cannot make a repository endpoint usable`, async (t) => {
     const project = await endpoint(t);
     const httpURL = project.url.replace("127.0.0.1", "0.0.0.0");
     const { cwd, env, session } = await workspace(t, `OPENAI_BASE_URL=${httpURL}\nOPENAI_API_KEY=dummy\n`);
     const beforeSession = await readFile(session, "utf8");
     const refused = await runCli([...mode.args, "--allow-insecure-http"], cwd, env);
     assert.equal(refused.code, 2, refused.stderr);
-    assert.match(refused.stderr, /refusing to send credentials or context/);
+    assert.match(refused.stderr, /no API key/);
     assert.equal(project.requests.length, 0);
     assert.equal(await readFile(session, "utf8"), beforeSession);
   });

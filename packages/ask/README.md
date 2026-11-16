@@ -64,36 +64,83 @@ git clone git@github.com:codehausau/ask.git
 cd ask
 pnpm install
 pnpm build                                    # builds every workspace package
-cp packages/ask/.env.example packages/ask/.env  # add your key; export OPENAI_BASE_URL for a custom endpoint
 ```
 
-`.env` is read from the working directory first, then the install root (in a
-source checkout, `packages/ask`).
-**Anything already exported wins over the file**, so a shell `OPENAI_API_KEY` is
-never silently replaced by a stale `.env`. If a key cannot be found, the error
-lists every file that was checked and what each one defined.
+### Configuration
 
-All automatically discovered `.env` files, including install-location fallbacks,
-may set only `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_ORG_ID`,
-`OPENAI_PROJECT_ID`, and `ASK_MODEL`. Other keys are ignored and their names
-reported on stderr (`--quiet` suppresses the notice). Canonical paths are
-deduplicated so the same file is loaded once, even through a symlink.
-Export settings such as `ASK_SYSTEM`, `ASK_STATE_DIR`, and `ASK_SKILLS_DIR` in
-your shell instead, or use the corresponding CLI option where available.
+Settings live in JSON files (comments and trailing commas allowed). Start from
+[`ask.example.jsonc`](https://github.com/codehausau/ask/blob/main/packages/ask/ask.example.jsonc):
 
-**Choose the endpoint explicitly.** An `OPENAI_BASE_URL` loaded from any automatic
-`.env` file is refused before sending a request, even if that file also supplies
-an API key or the endpoint is local. Set `--base-url <url>` or export
-`OPENAI_BASE_URL` in your shell instead; this prevents a repository from choosing
-where your credentials, attached files, and session history are sent. The same
-rule applies to `/compact`. Offline `--dry-run` and `--show-context` remain usable.
+```bash
+mkdir -p ~/.config/ask
+cp ask.example.jsonc ~/.config/ask/ask.jsonc   # from packages/ask in a checkout
+chmod 600 ~/.config/ask/ask.jsonc
+```
+
+**Files.** Each config directory may contain:
+
+| File | Holds |
+| --- | --- |
+| `ask.json` or `ask.jsonc` | common settings: `endpoint` (`url`, `apiKey`, `organization`, `project`), `model`, `system`, `temperature`, `maxTokens`, `timeout` (seconds) |
+| `cli.json` or `cli.jsonc` | CLI settings: `sessionMaxTokens`, `next` |
+| `tui.json` or `tui.jsonc` | TUI settings: `theme`, `contextWindow`, `mouse` |
+| `skills/<name>/` | skills, in the global directory and the project's `.ask/` (see [Skills](#skills)) |
+
+**Layers**, lowest precedence first; later layers win:
+
+1. `~/.config/ask/` (or `$XDG_CONFIG_HOME/ask/`), your global config
+2. `--config <dir>` or `$ASK_CONFIG`, a custom config directory
+3. `ask.json(c)` in the project root (the Git work tree, or the current directory)
+4. `.ask/` in the project root (`ask`, `cli` and `tui` files)
+5. `$ASK_CONFIG_CONTENT`, inline JSON with the same keys, plus `cli` and `tui` sections
+6. single-setting variables: `ASK_MODEL`, `ASK_SYSTEM`, `ASK_TIMEOUT`, `ASK_NEXT`, `ASK_THEME`, `ASK_CONTEXT_WINDOW`
+7. command-line flags such as `--model`, `--timeout` and `--base-url`
+
+Objects merge key by key, other values are replaced, and `null` removes a lower
+layer's value (for example `"system": null`). An empty string means "not set".
+`OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_ORG_ID` and `OPENAI_PROJECT_ID` are
+used only when no layer sets the endpoint: other tools use those names too.
+
+**`{env:NAME}`** inside any string is replaced by that variable's value, so a
+key can stay out of the file: `"apiKey": "{env:WORK_LLM_KEY}"`. An unset
+variable resolves to an empty string, which falls through to lower layers.
+
+**See the result** with `ask --show-config` (or `ask /config`). It lists every
+layer, every setting and where it came from, and anything ignored; API keys are
+never printed.
+
+**Projects need trust to choose the endpoint.** A cloned repository's
+`ask.json` could otherwise send your files and key to its own server, or use
+`{env:GITHUB_TOKEN}` to copy a secret into a request. Until you trust it, a
+project's config may set preferences (model, system prompt, timeouts, TUI
+settings) but its `endpoint` and any `{env:}` values are ignored, with a note
+naming each. Review the files, then:
+
+```bash
+ask /trust      # records the project's config files and their contents
+ask /untrust    # withdraws it
+```
+
+Trust is stored with a hash of the files, so any change (say, after `git pull`)
+needs `ask /trust` again.
+
+**Safety checks.** A config file that every user can write, or that another
+user owns, is not read, and that is always reported. Wrong types are errors that
+name the file and setting; unknown settings are reported and ignored. If a layer
+changes `endpoint.url` without setting `apiKey`, a lower layer's key is not
+reused, so a key never follows a URL chosen somewhere else (`--base-url` on the
+command line is the exception: it keeps the effective key).
+
+**`.env` files are never read.** A project's `.env` belongs to that project, and
+earlier versions reading it could pick up another account's key. If a
+working-directory `.env` still holds `ask`'s settings and no key is found, the
+error points it out.
 
 **Remote endpoints must use HTTPS by default.** HTTP is allowed for recognised
 loopback endpoints (`localhost`, `*.localhost`, `127.0.0.1`, and `[::1]`), so
 local servers work as before. To deliberately use a non-loopback HTTP endpoint,
 pass `--allow-insecure-http`; credentials and context will be sent unencrypted.
-This is a per-invocation flag for both normal requests and `/compact`, and does
-not authorize an endpoint selected only by a `.env` file.
+This is a per-invocation flag for both normal requests and `/compact`.
 
 Or straight from a release, no toolchain required:
 
@@ -398,6 +445,9 @@ when Git cannot verify the undo copy.
 | `--base-url <url>` | OpenAI-compatible endpoint (env `OPENAI_BASE_URL`) |
 | `--allow-insecure-http` | explicitly allow unencrypted HTTP to a non-loopback endpoint |
 | `--api-key <key>` | API key (env `OPENAI_API_KEY`) |
+| `--config <dir>` | add a config directory (also `ASK_CONFIG`); see [Configuration](#configuration) |
+| `--show-config` / `/config` | print every setting and where it came from |
+| `/trust` / `/untrust` | allow or withdraw this project's endpoint and `{env:}` settings |
 | `-f, --file <path>` | attach a path explicitly; repeatable |
 | `--max-tokens <n>` / `--temperature <n>` | only sent when set |
 | `--token-field <name>` | force `max_tokens` or `max_completion_tokens` |
@@ -896,6 +946,9 @@ export ASK_MODEL=qwen2.5-coder:7b
 ask '@src/chat.ts review this file for me'
 ```
 
+To make that the default, put it in `~/.config/ask/ask.json`:
+`{ "endpoint": { "url": "http://localhost:11434/v1" }, "model": "qwen2.5-coder:7b" }`.
+
 No API key is needed — a loopback `OPENAI_BASE_URL` (`localhost`, `127.0.0.1`,
 `[::1]`) skips the key requirement, since local servers ignore the
 `Authorization` header. A remote endpoint still requires one.
@@ -956,7 +1009,9 @@ src/skip.ts           skip rules shared by attachment and search
 src/context.ts        resolved paths → sorted, filtered, capped text blocks
 src/chat.ts           request builder + one-shot transport (no tools by construction)
 src/options.ts        the flag table, shared with the completion test
-src/cli.ts            flags, stdin, .env, output modes
+src/config.ts         layered JSON config, {env:} substitution, project trust
+src/env.ts            reads old .env files only to explain they are unused
+src/cli.ts            flags, stdin, output modes
 completions/ask.bash  bash/zsh completion + optional fzf picker
 test/                 node:test, no network, no key required
 ```

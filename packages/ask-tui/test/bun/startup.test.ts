@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -54,8 +54,9 @@ test("startup theme uses flag over exported default and ignores automatic .env t
       { value: "invalid-env-theme", args: ["--theme", "tokyo-night"], expected: /no API key/ },
       { value: "dracula", args: ["--theme", "invalid-flag-theme"], expected: /Unknown theme: invalid-flag-theme/ },
       { value: "invalid-env-theme", args: [], expected: /Unknown theme: invalid-env-theme/ },
-      { value: "", args: [], expected: /Unknown theme:/ },
-      { value: "dracula", args: ["--theme", ""], expected: /Unknown theme:/ },
+      // An empty value means "not set": the default theme applies.
+      { value: "", args: [], expected: /no API key/ },
+      { value: "invalid-env-theme", args: ["--theme", ""], expected: /Unknown theme: invalid-env-theme/ },
     ];
     for (const { value, args, expected } of cases) {
       const bootstrap = `
@@ -77,6 +78,48 @@ test("startup theme uses flag over exported default and ignores automatic .env t
   } finally { await rm(cwd, { recursive: true, force: true }); }
 });
 
+test("tui.json layers apply to startup: global, --config, ASK_THEME, then the flag", async () => {
+  const cwd = await mkdtemp(path.join(tmpdir(), "ask-tui-startup-config-"));
+  try {
+    const xdg = path.join(cwd, "xdg");
+    const custom = path.join(cwd, "custom");
+    await mkdir(path.join(xdg, "ask"), { recursive: true });
+    await mkdir(custom);
+    await writeFile(path.join(xdg, "ask", "tui.json"), '{ "theme": "global-theme" }');
+    await writeFile(path.join(custom, "tui.jsonc"), '{ "theme": "custom-theme", /* comment */ }');
+    for (const file of [path.join(xdg, "ask", "tui.json"), path.join(custom, "tui.jsonc")]) await chmod(file, 0o600);
+    const env: NodeJS.ProcessEnv = { ...process.env, XDG_CONFIG_HOME: xdg, ASK_STATE_DIR: path.join(cwd, "state") };
+    for (const key of Object.keys(env)) {
+      if (/^(ASK_|OPENAI_|BUN_)/.test(key) && key !== "ASK_STATE_DIR") delete env[key];
+    }
+    const entry = new URL("../../src/index.ts", import.meta.url).href;
+    // An unknown theme stops startup and names its value, proving which layer won.
+    for (const { args, exported, expected } of [
+      { args: [], exported: undefined, expected: /Unknown theme: global-theme/ },
+      { args: ["--config", "custom"], exported: undefined, expected: /Unknown theme: custom-theme/ },
+      { args: ["--config", "custom"], exported: "exported-theme", expected: /Unknown theme: exported-theme/ },
+      { args: ["--config", "custom", "--theme", "flag-theme"], exported: "exported-theme", expected: /Unknown theme: flag-theme/ },
+      { args: ["--config", "missing"], exported: undefined, expected: /--config .*missing.* is not a directory/ },
+    ]) {
+      const bootstrap = `
+        process.argv = [process.execPath, "index.ts", ...${JSON.stringify(args)}];
+        Object.defineProperty(process.stdin, "isTTY", { value: true });
+        Object.defineProperty(process.stdout, "isTTY", { value: true });
+        await import(${JSON.stringify(entry)});
+      `;
+      const stderr = await new Promise<string>((resolve, reject) => {
+        execFile(process.execPath, ["--no-env-file", ...configFlags, "-e", bootstrap], {
+          cwd, env: { ...env, ...(exported === undefined ? {} : { ASK_THEME: exported }) }, timeout: 10_000,
+        }, (error, _stdout, stderr) => {
+          if (!error || error.code !== 1) { reject(error ?? new Error("expected startup to stop before UI")); return; }
+          resolve(stderr);
+        });
+      });
+      assert.match(stderr, expected);
+    }
+  } finally { await rm(cwd, { recursive: true, force: true }); }
+});
+
 test("context capacity accepts an exported default, validates it and prefers the flag", async () => {
   const cwd = await mkdtemp(path.join(tmpdir(), "ask-tui-context-window-"));
   try {
@@ -87,7 +130,8 @@ test("context capacity accepts an exported default, validates it and prefers the
     const entry = new URL("../../src/index.ts", import.meta.url).href;
     const cases = [
       { value: "32768", args: [], expected: /no API key/ },
-      { value: "invalid", args: ["--context-window", "65536"], expected: /no API key/ },
+      // Every layer is validated, even one a flag overrides, like an invalid config file.
+      { value: "invalid", args: ["--context-window", "65536"], expected: /Invalid ASK_CONTEXT_WINDOW/ },
       { value: "32768", args: ["--context-window", "0"], expected: /Invalid --context-window/ },
       ...["", "0", "-1", "1.5", "NaN", "Infinity", "9007199254740992"].map((value) => ({
         value, args: [], expected: /Invalid ASK_CONTEXT_WINDOW/,
@@ -130,7 +174,7 @@ test("TUI can list skills offline without an API key or terminal", async () => {
   } finally { await rm(cwd, { recursive: true, force: true }); }
 });
 
-test("real Bun entry refuses autoload and repository-selected endpoints before a request", async () => {
+test("real Bun entry refuses autoload and never reads a repository .env, before any request", async () => {
   const cwd = await mkdtemp(path.join(tmpdir(), "ask-tui-startup-"));
   let requests = 0;
   const server = createServer((_request, response) => { requests++; response.end("unexpected"); });
@@ -158,7 +202,9 @@ test("real Bun entry refuses autoload and repository-selected endpoints before a
         });
       });
       assert.equal(result.code, 1);
-      assert.match(result.stderr, flags.length ? /automatic \.env file/ : /autoload must be disabled/);
+      // The repository .env is never read: no key, so nothing can be sent anywhere.
+      assert.match(result.stderr, flags.length ? /no API key[\s\S]*no longer reads \.env files/ : /autoload must be disabled/);
+      assert.doesNotMatch(result.stderr, /repository-key/);
     }
     assert.equal(requests, 0);
   } finally {

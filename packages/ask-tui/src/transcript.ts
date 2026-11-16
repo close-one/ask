@@ -5,6 +5,7 @@ import {
 import type { Token } from "marked";
 import { sanitizeForTerminal, terminalField } from "@codehaus-au/ask/internal/terminal";
 import type { TuiTheme } from "./theme.ts";
+import type { UpdateSummary } from "./updates.ts";
 import { COMPOSER_PADDING } from "./layout.ts";
 
 /** Native inline markup, without a Tree-sitter worker/download. */
@@ -85,9 +86,26 @@ export function createTranscript(renderer: CliRenderer, transcript: ScrollBoxRen
     }));
   }
 
-  function review(diffs: readonly string[]) {
-    for (const diff of diffs) {
+  /** What the model proposed, before any diff is shown. Nothing is written yet. */
+  function proposals(summary: readonly UpdateSummary[]) {
+    const rows = summary.map((file) =>
+      `  ${terminalField(file.path)}  +${file.added} -${file.removed}${file.sensitive ? `  ⚠ ${file.sensitive}` : ""}`);
+    const sensitive = summary.filter((file) => file.sensitive).length;
+    addText([
+      `Proposed edits to ${summary.length} file(s); nothing has been written:`, ...rows,
+      ...(sensitive ? [`⚠ ${sensitive} file(s) can run code or change automation. Read those diffs closely.`] : []),
+      "Run /review to see the diffs, then /apply (all) or /apply <path>. /reject discards.",
+    ].join("\n"), sensitive ? "#fda4af" : "#fcd34d");
+  }
+
+  function review(diffs: readonly { diff: string; sensitive: string | null }[]) {
+    for (const { diff, sensitive } of diffs) {
       const panel = new BoxRenderable(renderer, { flexDirection: "column", width: "100%", flexShrink: 0 });
+      if (sensitive) {
+        panel.add(new TextRenderable(renderer, {
+          content: `⚠ ${sensitive}: this file can run code or change automation`, fg: "#fda4af", flexShrink: 0, selectable: true,
+        }));
+      }
       for (const line of diff.split("\n")) {
         panel.add(new TextRenderable(renderer, {
           // Approval must expose every byte, not remove escape-string payloads.
@@ -97,7 +115,7 @@ export function createTranscript(renderer: CliRenderer, transcript: ScrollBoxRen
       }
       transcript.add(panel);
     }
-    addText("Review the proposed diffs above. Control characters are shown as escapes. /apply approves all pending files; /reject discards them.\nMultiple files are written individually, not as an all-or-nothing transaction.", "#fcd34d");
+    addText("Review the proposed diffs above. Control characters are shown as escapes. /apply writes every reviewed file, or /apply <path> just one; /reject [path] discards.\nMultiple files are written individually, not as an all-or-nothing transaction.", "#fcd34d");
   }
 
   function clear() {
@@ -114,7 +132,7 @@ export function createTranscript(renderer: CliRenderer, transcript: ScrollBoxRen
   }
 
   return {
-    addText, addUserMessage, addAnswer, review, clear,
+    addText, addUserMessage, addAnswer, proposals, review, clear,
     paintTheme() {
       for (const text of markdownText) {
         if (text.isDestroyed) markdownText.delete(text); else theme.paint(text);

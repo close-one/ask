@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { filterPopupItems, isFileCandidateVisible, SLASH_COMMANDS, type PopupItem } from "../src/picker.ts";
-import { chatRefs, serializeMention } from "../src/mentions.ts";
+import { commandPaths } from "../src/commands.ts";
+import { chatRefs, escapePastedMentions, serializeMention } from "../src/mentions.ts";
 
 test("picker mentions round-trip parser delimiters and cannot introduce extra attachments", () => {
   for (const name of ["src/routes/(group)/page.ts", "notes).ts", "report,", "report;", "report:",
@@ -43,4 +44,11 @@ test("hidden file/folder candidates require an explicit dot-prefixed filename co
   assert.equal(isFileCandidateVisible(".config/settings.ts", ".config/set"), true);
   assert.equal(isFileCandidateVisible(".config/.nested/file.ts", ".config/"), false);
   assert.equal(isFileCandidateVisible(".config/.nested/file.ts", ".config/."), true);
+});
+
+test("pasted text escapes would-be mentions; review commands accept quoted paths", () => {
+  const pasted = escapePastedMentions("@dataclass\nclass A:\n  @property\n  def x(self): pass  # me@host stays\n(@Inject)");
+  assert.equal(pasted, "\\@dataclass\nclass A:\n  \\@property\n  def x(self): pass  # me@host stays\n(\\@Inject)");
+  assert.deepEqual(chatRefs(pasted), []);
+  assert.deepEqual(commandPaths(` a.ts "name with spaces.ts" 'b c.ts' @d.ts`), ["a.ts", "name with spaces.ts", "b c.ts", "@d.ts"]);
 });

@@ -23,8 +23,12 @@ ask-tui --help
 This also installs the matching `@codehaus-au/ask` as a dependency. Install
 `@codehaus-au/ask` globally as well if you want the `ask` command.
 
-## Usage
+The launcher looks Bun up by absolute path. It ignores empty and relative `PATH`
+entries and any directory inside the current folder, so a repository cannot
+supply its own `bun` (on Windows the current folder would otherwise be searched
+first). To use a specific Bun, export `ASK_BUN` with its absolute path.
 
+## Usage
 
 The TUI requires **Bun 1.3.14+**. The existing `ask` CLI still runs on Node 20+;
 it never imports OpenTUI. Package managers may warn about OpenTUI's newer engine
@@ -58,6 +62,13 @@ a duplicate sigil. Deleting and retyping a mention also reopens it. Paths with s
 you can also type `@"path with spaces.ts"` yourself. When no candidate popup is
 active, **Enter** sends. **Shift+Enter** always adds a newline. PageUp/PageDown
 and the mouse wheel scroll the transcript.
+
+Typed mentions must name an existing file or folder, or a glob such as
+`@src/*.ts`; a mention that names nothing is refused rather than searched for.
+Use the `@` menu to search. Type `\@` for a literal `@` (for example
+`\@Override`); the model receives a plain `@`. Pasted text is never treated as a
+mention: pasting escapes any `@` that would start one, so decorators, JSDoc tags
+and handles in pasted code stay text.
 
 Both `@` and `/attach` hide dotfiles/dotfolders by default. Start a filename
 component with `.` to reveal matching hidden entries, for example `@.` or
@@ -248,8 +259,15 @@ files). With a capacity, the footer shows usage such as `1.2K tokens (3.7%)`,
 and the sidebar shows the exact count, capacity and percentage. Percentages use
 the last response's input plus output, not cumulative session totals.
 Without either setting the sidebar shows an unknown window limit and the footer
-omits the percentage. These settings are display-only: they do not set the
-server's context size or change request limits.
+omits the percentage. The setting never changes the server's context size.
+
+The capacity also limits what is sent. Before each request, the TUI estimates its
+size (bytes ÷ 4) and drops the oldest history until the system prompt, history,
+your message and attachments fit in 90% of the window, less room for the answer
+(`--max-tokens`, or 4096 tokens capped at a quarter of the window). A message
+that cannot fit even without history is refused before anything is sent: detach
+files or ask about less. Without a capacity, resent history alone is capped at
+about 32000 tokens, the same default as CLI sessions.
 
 ### Ordinary chat and edits
 
@@ -278,11 +296,12 @@ What would you improve about that function?
 References remain attached until `/detach <path>` or `/new`. Resolved file/folder
 attachments appear in the sidebar as soon as submission context is validated,
 before the model responds, and remain attached if the request fails. Resolved
-paths are retained rather than re-running a fuzzy search. Their contents are
+paths are retained rather than re-running a search. Their contents are
 re-read before each submission and appended **after the message** as `<file>`
 blocks; previous file contents are not duplicated in chat history. Attachment
-skip rules and size caps are shared with the CLI. Removed references fail visibly;
-detach them rather than silently sending a different file. A folder reference
+skip rules and size caps are shared with the CLI. A file or folder deleted after
+it was attached is dropped from the attachments, with a notice, rather than
+replaced by another match. A folder reference
 includes its children except for files explicitly excluded through context management.
 
 The model can suggest edits to any complete, editable file in the current
@@ -302,17 +321,33 @@ It produces ordinary response text with a defined format, not API tool calls:
 > </update>
 > ```
 
-The TUI displays the answer and proposed diffs. **Nothing is written until you
-submit `/apply`**. `/review` shows the diff again; `/reject` discards the edits.
-Review and apply are local operations, with no second LLM request. Resolve pending
-edits before sending another question. `/apply` approves the entire pending batch.
+After the answer, the TUI lists each proposed file with its added/removed line
+counts. Files that can run code or change automation (CI workflows, package
+scripts, build files, git hooks, shell scripts, dotfiles) are marked ⚠.
+**Nothing is written until you review and apply:**
+
+```text
+/review                 show the diff for every pending file
+/review src/a.ts        show one file's diff
+/apply                  write every reviewed file
+/apply src/a.ts         write one file; the rest stay pending
+/reject [path...]       discard proposals (all when no path is given)
+```
+
+Only files whose diff you have shown with `/review` can be applied. Each diff has
+one section per edit, with three lines of context, so unchanged lines between two
+edits are never shown as removed and re-added. Quote paths containing spaces.
+Review and apply are local operations, with no second LLM request. Resolve every
+pending file before sending another question.
 
 Safety rules:
 
 - Paths must exactly match an attached file in the current request, inside the
   working directory. Truncated files and symlinks are read-only.
 - SEARCH must match exactly once, byte-for-byte in UTF-8. There is no fuzzy matching.
-  Multiple edits match the original file and must not overlap.
+  Multiple edits match the original file and must not overlap. In a file that
+  uses CRLF line endings throughout, the model's LF text is matched and written
+  as CRLF; files with mixed endings are matched exactly.
 - Malformed blocks, incomplete responses, or any invalid edit invalidate the
   entire proposal. Examples inside Markdown code fences are not actionable.
 - Approval diffs show control characters as visible escapes, including the
@@ -328,13 +363,15 @@ Safety rules:
 
 This initial TUI supports updates to existing files only. Use `ask /create` for
 new files. It has **in-memory history only** (separate from CLI sessions), no
-automatic compaction/pruning, no streaming, no model tools, and no automatic
-retries. Use `/new` to clear history, attachments, skills and pending edits, and
+compaction, no streaming, no model tools, and no automatic retries. Use `/new` to clear history, attachments, skills and pending edits, and
 destroy the visible transcript and its native renderables. Theme and sidebar
 width remain selected for the current run. `/context`
 opens the context manager; `/help` lists commands; `/quit` or Ctrl+D exits.
 Ctrl+C exits only when no text is selected; otherwise it copies the selection.
-Long conversations resend their history and can exceed the provider's window.
+Each request resends the conversation history. When it no longer fits (see
+`--context-window` above), the oldest messages are dropped first, with a notice,
+and history always restarts at a question. Attached files are re-read and sent in
+full every time; they are never trimmed.
 
 ### Skills in the TUI
 

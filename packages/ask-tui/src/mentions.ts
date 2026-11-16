@@ -4,6 +4,13 @@ export function chatRefs(text: string): string[] {
     .map((match) => match[1] ?? match[2] ?? match[3]!.replace(/[,;:]$/, ""));
 }
 
+/** Pasted code (decorators, JSDoc tags, handles) must never attach files, so
+ * escape anything that would read as a mention. The model receives plain @.
+ */
+export function escapePastedMentions(text: string): string {
+  return text.replace(/(^|[\s(])@/g, "$1\\@");
+}
+
 /** Return null instead of inserting a reference that could select another file. */
 export function serializeMention(target: string): string | null {
   if (!target || /[\r\n]/.test(target)) return null;

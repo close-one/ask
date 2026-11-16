@@ -1,7 +1,9 @@
 import { createHostClipboard, PasteEvent, type CliRenderer, type HostClipboardService, type TextareaRenderable, type TextRenderable } from "@opentui/core";
 import { sanitizeForTerminal } from "@codehaus-au/ask/internal/terminal";
+import { escapePastedMentions } from "./mentions.ts";
 
 const MAX_PASTE_BYTES = 1024 * 1024;
+
 export type ClipboardFactory = () => Pick<HostClipboardService, "read" | "dispose">;
 
 /** User-triggered clipboard I/O, scoped to the lifetime and draft of one UI. */
@@ -34,8 +36,10 @@ export function createClipboardController(
     }
     if (!event.bytes.byteLength) { status.content = "Clipboard is empty."; return; }
     input.focus();
+    const text = new TextDecoder().decode(event.bytes);
+    const escaped = escapePastedMentions(text);
     // Native ANSI stripping; newlines are buffer data, never submission events.
-    input.handlePaste(event);
+    input.handlePaste(escaped === text ? event : new PasteEvent(new TextEncoder().encode(escaped), event.metadata));
     status.content = "Pasted clipboard text.";
   }
 

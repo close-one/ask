@@ -32,9 +32,11 @@ export interface UpdateBlock {
   readonly replacement: string;
 }
 
-/** Strict line-based grammar. Examples inside Markdown fences are not proposals. */
+/** Strict line-based grammar. Examples inside Markdown fences are not proposals.
+ * CRLF responses are read as LF; prepareUpdates restores a CRLF file's endings.
+ */
 export function parseUpdates(text: string): UpdateBlock[] {
-  const lines = text.split("\n");
+  const lines = text.replace(/\r\n/g, "\n").split("\n");
   const updates: UpdateBlock[] = [];
   let fence = "";
   for (let i = 0; i < lines.length; i++) {
@@ -78,9 +80,18 @@ export interface EditableFile {
   readonly original: string;
 }
 
+/** A replaced range of the original text, as the model proposed it. */
+export interface EditSpan {
+  readonly start: number;
+  readonly end: number;
+  readonly replacement: string;
+}
+
 export interface ProposedUpdate extends EditableFile {
   readonly path: string;
   readonly proposed: string;
+  /** Non-overlapping, in order. The review diff shows exactly these ranges. */
+  readonly edits: readonly EditSpan[];
 }
 
 /** Capture before sending. Read-only attachments may be ineligible for writing. */
@@ -109,12 +120,16 @@ export function prepareUpdates(updates: readonly UpdateBlock[], files: ReadonlyM
   }
   return [...grouped].map(([target, edits]) => {
     const file = files.get(target)!;
+    // Models write LF. In a file that consistently uses CRLF, match and write CRLF.
+    const crlf = file.original.includes("\r\n") && !/(?:^|[^\r])\n/.test(file.original);
+    const endings = (text: string) => crlf && !text.includes("\r") ? text.replace(/\n/g, "\r\n") : text;
     const spans = edits.map((edit) => {
-      const start = file.original.indexOf(edit.search);
-      if (start < 0 || file.original.indexOf(edit.search, start + 1) >= 0) {
+      const search = endings(edit.search);
+      const start = file.original.indexOf(search);
+      if (start < 0 || file.original.indexOf(search, start + 1) >= 0) {
         throw new Error(`SEARCH must match exactly once in ${JSON.stringify(target)}.`);
       }
-      return { start, end: start + edit.search.length, replacement: edit.replacement };
+      return { start, end: start + search.length, replacement: endings(edit.replacement) };
     }).sort((a, b) => a.start - b.start);
     let end = 0;
     let proposed = "";
@@ -124,7 +139,7 @@ export function prepareUpdates(updates: readonly UpdateBlock[], files: ReadonlyM
       end = span.end;
     }
     proposed += file.original.slice(end);
-    return { ...file, path: target, proposed };
+    return { ...file, path: target, proposed, edits: spans };
   }).filter((edit) => edit.original !== edit.proposed);
 }
 
@@ -145,31 +160,171 @@ export async function applyUpdates(updates: readonly ProposedUpdate[]): Promise<
   return applied;
 }
 
-/** A single unified hunk with shared prefix/suffix trimmed. No Git or subprocess. */
-export function updateDiff(update: Pick<ProposedUpdate, "path" | "original" | "proposed">): string {
-  // Keep terminators in comparisons, so adding/removing a final newline is
-  // visible rather than misrepresented as an extra blank source line.
-  const before = update.original.match(/[^\n]*\n|[^\n]+$/g) ?? [];
-  const after = update.proposed.match(/[^\n]*\n|[^\n]+$/g) ?? [];
+type DiffInput = Pick<ProposedUpdate, "path" | "original" | "proposed"> & { readonly edits?: readonly EditSpan[] };
+
+interface LineChange {
+  /** Index of the first removed line in the original (the insertion point if none). */
+  readonly oldIndex: number;
+  readonly newIndex: number;
+  readonly removed: readonly string[];
+  readonly added: readonly string[];
+}
+
+const DIFF_CONTEXT = 3;
+
+/** Lines keep their terminators, so adding/removing a final newline is a visible change. */
+function splitLines(text: string): string[] {
+  return text.match(/[^\n]*\n|[^\n]+$/g) ?? [];
+}
+
+/** Without recorded edits, treat the differing middle as one replacement. */
+function wholeSpan(original: string, proposed: string): EditSpan[] {
   let prefix = 0;
-  while (prefix < before.length && prefix < after.length && before[prefix] === after[prefix]) prefix++;
+  while (prefix < original.length && prefix < proposed.length && original[prefix] === proposed[prefix]) prefix++;
   let suffix = 0;
-  while (suffix < before.length - prefix && suffix < after.length - prefix &&
-    before[before.length - 1 - suffix] === after[after.length - 1 - suffix]) suffix++;
-  const start = Math.max(0, prefix - 3);
-  const beforeEnd = Math.min(before.length, before.length - suffix + 3);
-  const afterEnd = Math.min(after.length, after.length - suffix + 3);
-  function rows(lines: string[], sign: string): string[] {
-    return lines.flatMap((line) => line.endsWith("\n")
-      ? [sign + line.slice(0, -1)]
-      : [sign + line, "\\ No newline at end of file"]);
+  while (suffix < original.length - prefix && suffix < proposed.length - prefix &&
+    original[original.length - 1 - suffix] === proposed[proposed.length - 1 - suffix]) suffix++;
+  return original === proposed ? [] : [{ start: prefix, end: original.length - suffix, replacement: proposed.slice(prefix, proposed.length - suffix) }];
+}
+
+/**
+ * Line changes derived from the edit spans, not from comparing whole files, so
+ * unchanged lines between two edits are context rather than removed and re-added.
+ */
+function lineChanges(update: DiffInput): { lines: string[]; changes: LineChange[] } {
+  const { original } = update;
+  const spans = update.edits ?? wholeSpan(original, update.proposed);
+  const lines = splitLines(original);
+  const starts: number[] = [];
+  let offset = 0;
+  for (const line of lines) { starts.push(offset); offset += line.length; }
+  const lineAt = (position: number) => {
+    let low = 0;
+    let high = starts.length - 1;
+    while (low < high) {
+      const middle = (low + high + 1) >> 1;
+      if (starts[middle]! <= position) low = middle; else high = middle - 1;
+    }
+    return low;
+  };
+  const lineEnd = (index: number) => index < lines.length ? starts[index]! : original.length;
+  const lastLine = (span: EditSpan) => lineAt(span.end > span.start ? span.end - 1 : span.start) + 1;
+
+  const changes: LineChange[] = [];
+  let delta = 0;
+  for (let i = 0; i < spans.length;) {
+    const first = lines.length ? lineAt(spans[i]!.start) : 0;
+    let last = lines.length ? lastLine(spans[i]!) : 0;
+    let j = i + 1;
+    let before = "";
+    let after = "";
+    for (;;) {
+      // Edits that share a line are shown together.
+      while (j < spans.length && lineAt(spans[j]!.start) < last) { last = Math.max(last, lastLine(spans[j]!)); j++; }
+      before = original.slice(lineEnd(first), lineEnd(last));
+      after = "";
+      let cursor = lineEnd(first);
+      for (const span of spans.slice(i, j)) {
+        after += original.slice(cursor, span.start) + span.replacement;
+        cursor = span.end;
+      }
+      after += original.slice(cursor, lineEnd(last));
+      // A replacement that drops a line break joins the next line, so include it.
+      if (after && !after.endsWith("\n") && last < lines.length) { last++; continue; }
+      break;
+    }
+    const removed = splitLines(before);
+    const added = splitLines(after);
+    let head = 0;
+    while (head < removed.length && head < added.length && removed[head] === added[head]) head++;
+    let tail = 0;
+    while (tail < removed.length - head && tail < added.length - head &&
+      removed[removed.length - 1 - tail] === added[added.length - 1 - tail]) tail++;
+    const change = {
+      oldIndex: first + head, newIndex: first + head + delta,
+      removed: removed.slice(head, removed.length - tail), added: added.slice(head, added.length - tail),
+    };
+    if (change.removed.length || change.added.length) changes.push(change);
+    delta += added.length - removed.length;
+    i = j;
   }
-  return [
-    `--- ${JSON.stringify(update.path)}`, `+++ ${JSON.stringify(update.path)}`,
-    `@@ -${beforeEnd ? start + 1 : 0},${beforeEnd - start} +${afterEnd ? start + 1 : 0},${afterEnd - start} @@`,
-    ...rows(before.slice(start, prefix), " "),
-    ...rows(before.slice(prefix, before.length - suffix), "-"),
-    ...rows(after.slice(prefix, after.length - suffix), "+"),
-    ...rows(before.slice(before.length - suffix, beforeEnd), " "),
-  ].join("\n");
+  return { lines, changes };
+}
+
+/** Unified diff with one hunk per nearby group of edits. No Git or subprocess. */
+export function updateDiff(update: DiffInput): string {
+  const { lines, changes } = lineChanges(update);
+  const rows = (items: readonly string[], sign: string) => items.flatMap((line) => line.endsWith("\n")
+    ? [sign + line.slice(0, -1)]
+    : [sign + line, "\\ No newline at end of file"]);
+  const out = [`--- ${JSON.stringify(update.path)}`, `+++ ${JSON.stringify(update.path)}`];
+  for (let i = 0; i < changes.length;) {
+    let j = i + 1;
+    const end = (change: LineChange) => change.oldIndex + change.removed.length;
+    while (j < changes.length && changes[j]!.oldIndex - end(changes[j - 1]!) <= DIFF_CONTEXT * 2) j++;
+    const group = changes.slice(i, j);
+    const firstChange = group[0]!;
+    const lastChange = group.at(-1)!;
+    const from = Math.max(0, firstChange.oldIndex - DIFF_CONTEXT);
+    const to = Math.min(lines.length, end(lastChange) + DIFF_CONTEXT);
+    const body = rows(lines.slice(from, firstChange.oldIndex), " ");
+    group.forEach((change, index) => {
+      body.push(...rows(change.removed, "-"), ...rows(change.added, "+"));
+      body.push(...rows(lines.slice(end(change), index + 1 < group.length ? group[index + 1]!.oldIndex : to), " "));
+    });
+    const oldCount = to - from;
+    const newCount = oldCount + group.reduce((sum, change) => sum + change.added.length - change.removed.length, 0);
+    const newFrom = firstChange.newIndex - (firstChange.oldIndex - from);
+    out.push(`@@ -${oldCount ? from + 1 : from},${oldCount} +${newCount ? newFrom + 1 : newFrom},${newCount} @@`, ...body);
+    i = j;
+  }
+  return out.join("\n");
+}
+
+export interface UpdateSummary {
+  readonly path: string;
+  readonly added: number;
+  readonly removed: number;
+  /** Why this file deserves extra care, or null. */
+  readonly sensitive: string | null;
+}
+
+const SENSITIVE_NAMES: ReadonlyMap<string, string> = new Map([
+  ["package.json", "package scripts run on install/build"],
+  ["pyproject.toml", "build and tool configuration"],
+  ["setup.py", "runs on install"],
+  ["setup.cfg", "build configuration"],
+  ["build.rs", "runs on build"],
+  ["makefile", "build commands"],
+  ["gnumakefile", "build commands"],
+  ["justfile", "build commands"],
+  ["rakefile", "build commands"],
+  ["dockerfile", "container build commands"],
+  ["jenkinsfile", "CI configuration"],
+  ["azure-pipelines.yml", "CI configuration"],
+  ["bitbucket-pipelines.yml", "CI configuration"],
+]);
+
+/** Paths whose contents run automatically: CI, builds, hooks, shell setup. */
+export function sensitivePathReason(file: string): string | null {
+  const parts = file.split(/[\\/]/);
+  const name = parts.at(-1)!.toLowerCase();
+  if (parts[0] === ".github" && (parts[1] === "workflows" || parts[1] === "actions")) return "CI configuration";
+  if ([".husky", ".githooks"].includes(parts[0]!) || name === ".pre-commit-config.yaml" || name === "lefthook.yml") return "git hooks";
+  if (name === ".gitlab-ci.yml" || parts[0] === ".circleci") return "CI configuration";
+  const known = SENSITIVE_NAMES.get(name) ?? (name.startsWith("dockerfile") ? "container build commands" : undefined);
+  if (known) return known;
+  if (/\.(?:sh|bash|zsh|ps1|bat|cmd)$/.test(name)) return "script";
+  if (parts.some((part) => part.startsWith(".") && part !== "." && part !== "..")) return "dotfile or hidden configuration";
+  return null;
+}
+
+export function updateSummary(update: ProposedUpdate): UpdateSummary {
+  const { changes } = lineChanges(update);
+  return {
+    path: update.path,
+    added: changes.reduce((sum, change) => sum + change.added.length, 0),
+    removed: changes.reduce((sum, change) => sum + change.removed.length, 0),
+    sensitive: sensitivePathReason(update.path),
+  };
 }

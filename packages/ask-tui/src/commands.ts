@@ -2,8 +2,10 @@ import type { TuiChat } from "./chat.ts";
 import type { ManagerMode } from "./completion.ts";
 
 export const TUI_HELP = `Chat: mention @files or @folders anywhere; quote paths with spaces.
-Each submission makes one request. No model tools or automatic follow-up requests.
-/review  show pending diffs    /apply  approve writes    /reject  discard proposals
+Typed mentions must name an existing path or glob; use the @ menu to search. Type \\@ for a literal @.
+Pasted text is never read as a mention. Each submission makes one request; no model tools.
+/review [path...]  show pending diffs    /apply [path...]  write reviewed files
+/reject [path...]  discard proposals     (no paths = every pending file)
 /context  manage context    /detach [path]  remove a reference or file
 /attach [term]  toggle attached files/folders locally
 /skill [term] or /skills [term]  open the same searchable skill-selection popup
@@ -21,8 +23,13 @@ PageUp/PageDown scroll the conversation. Chat history is not saved after exit.
 Updates only: use the existing ask /create command for new files.`;
 
 /** Local command dispatch never initiates a model request. */
+/** Whitespace-separated paths; quote a path containing spaces. */
+export function commandPaths(text: string): string[] {
+  return [...text.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)].map((match) => match[1] ?? match[2] ?? match[3]!);
+}
+
 export async function dispatchCommand(text: string, chat: TuiChat, actions: {
-  quit(): void; clear(): void; review(): void; copy(text: string | null): void;
+  quit(): void; clear(): void; review(paths: readonly string[]): void; copy(text: string | null): void;
   addText(text: string, color?: string): void; openManager(mode: ManagerMode, query?: string): void;
 }): Promise<"handled" | "return" | "prompt"> {
   if (text === "/quit" || text === "/exit") { actions.quit(); return "return"; }
@@ -42,9 +49,14 @@ export async function dispatchCommand(text: string, chat: TuiChat, actions: {
   else if (text === "/detach") actions.openManager("detach");
   else if (text.startsWith("/detach ")) {
     chat.detach(text.slice(8).replace(/^(["'])(.*)\1$/, "$2")); actions.addText("Reference/file removed from future file context.");
-  } else if (text === "/review") actions.review();
-  else if (text === "/reject") { chat.reject(); actions.addText("Proposals rejected; nothing written."); }
-  else if (text === "/apply") actions.addText(`Applied updates to ${JSON.stringify(await chat.apply())}. Review with git diff.`, "#a7f3d0");
+  } else if (/^\/review(?:\s|$)/.test(text)) actions.review(commandPaths(text.slice(7)));
+  else if (/^\/reject(?:\s|$)/.test(text)) {
+    const rejected = chat.reject(commandPaths(text.slice(7)));
+    actions.addText(`Rejected ${JSON.stringify(rejected)}; nothing written.${chat.pendingCount ? ` ${chat.pendingCount} file(s) still pending.` : ""}`);
+  } else if (/^\/apply(?:\s|$)/.test(text)) {
+    const applied = await chat.apply(commandPaths(text.slice(6)));
+    actions.addText(`Applied updates to ${JSON.stringify(applied)}. Review with git diff.${chat.pendingCount ? ` ${chat.pendingCount} file(s) still pending.` : ""}`, "#a7f3d0");
+  }
   else if (text.startsWith("/")) throw new Error("Unknown command. Use /help.");
   else return "prompt";
   return "handled";

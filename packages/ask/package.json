@@ -49,6 +49,10 @@
       "types": "./dist/src/safe-write.d.ts",
       "default": "./dist/src/safe-write.js"
     },
+    "./internal/session": {
+      "types": "./dist/src/session.d.ts",
+      "default": "./dist/src/session.js"
+    },
     "./internal/skills": {
       "types": "./dist/src/skills.d.ts",
       "default": "./dist/src/skills.js"

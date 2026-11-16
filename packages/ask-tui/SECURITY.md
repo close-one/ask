@@ -18,7 +18,9 @@ applies here too. This document covers what the TUI adds.
 | --- | --- |
 | One completion per submission | No model-driven execution loop; SDK retries are disabled; asserted in controller tests |
 | Nothing is written unless you approve it | `<update>` proposals require a diff review and `/apply` |
-| Repository runtime hooks never run | The Node launcher starts Bun with `--no-env-file` and a bundled `--config`, so repository/global `bunfig.toml` preloads are skipped |
+| Repository runtime hooks never run | The Node launcher runs Bun by absolute path, never from the working directory or a relative `PATH` entry, with `--no-env-file` and a bundled `--config`, so repository/global `bunfig.toml` preloads are skipped |
+| A question cannot attach an unintended file | Typed mentions must name an existing path or glob (no fuzzy search); pasted text is escaped so it never contains mentions |
+| You see what you approve | Proposals are summarised first; only files shown with `/review` can be applied, file by file; files that run code are flagged |
 
 ## TUI update proposals
 
@@ -39,11 +41,16 @@ SEARCH/REPLACE grammar; examples in Markdown fences are ignored. Each nonempty
 SEARCH must occur exactly once in the original file, and edits cannot overlap.
 Any invalid block or non-`stop` completion disables the whole proposal.
 
-The TUI shows proposed diffs before enabling `/apply`. These diffs visibly escape
+After a reply the TUI lists the proposed files with line counts and flags paths
+that run code or change automation (CI workflows, package scripts, build files,
+git hooks, shell scripts, dotfiles). `/apply` only writes files whose diff was
+shown with `/review`, and can approve or reject file by file. Each diff is built
+from the exact edit ranges, one section per edit with fixed context, so unchanged
+lines between edits are never shown as changed and a small change cannot be
+buried in a long rewrite. These diffs visibly escape
 control characters rather than stripping terminal escape sequences and their
 payloads: code that will be written cannot be concealed inside an OSC/DCS string.
-Approval applies the whole
-pending batch and **may replace dirty or untracked files without a Git undo copy**;
+Approval **may replace dirty or untracked files without a Git undo copy**;
 unlike CLI `/write`, explicit review is the authorization. All snapshots are
 preflighted first, then each file uses `src/safe-write.ts` for stale-target checks
 and atomic replacement. This is not a multi-file transaction: later I/O failures
@@ -56,7 +63,9 @@ only by the Bun TUI entry point, never by the existing Node CLI. Code blocks are
 rendered without Tree-sitter, so displaying an answer does not download parsers.
 Network endpoint provenance and remote-HTTP protections match the CLI; exiting
 the TUI cancels an in-flight completion request.
-The fixed Node launcher spawns Bun with `--no-env-file` and an absolute
+The fixed Node launcher resolves Bun to an absolute path (`ASK_BUN`, or a `PATH`
+search that skips empty and relative entries and any directory inside the working
+directory), then spawns it without a shell, with `--no-env-file` and an absolute
 `--config=<bundled bunfig.toml>` path. This skips automatic repository/global
 runtime configuration and disables runtime dependency
 auto-installation. Repository `.env*` values cannot masquerade as trusted exports
@@ -86,14 +95,17 @@ are limited to 1 MiB and two seconds, and cancelled on exit. No external clipboa
 utility is spawned. SSH/remote sessions refuse host reads to avoid accessing the
 wrong machine's clipboard; use native terminal paste instead. Native paste is
 routed to the composer exactly once, using OpenTUI's ANSI-stripping paste handler.
-Pasted newlines are data, not submission events. Clipboard text is not sent to
+Pasted newlines are data, not submission events. Pasted text also has any `@` that
+would start a mention escaped as `\@`, so pasted code cannot attach files. Clipboard text is not sent to
 the model until the user submits the prompt, and a changed draft/cursor/selection
 causes a delayed host read to be discarded rather than overwriting user input.
 
 TUI footer/sidebar usage comes from provider-reported counts. Missing usage is
 not treated as zero, and partial session totals are labelled. Context-window
 capacity is explicitly configured with `--context-window`, never guessed or
-looked up through an additional request; it is display-only.
+looked up through an additional request. When set, it bounds each request by
+trimming the oldest history locally (or refusing an oversized message before
+sending); it never changes server settings.
 
 Slash completion and context-management popups are local UI actions, not model
 tools. Detaching references or removing skills only changes future request

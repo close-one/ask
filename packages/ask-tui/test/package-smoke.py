@@ -95,8 +95,10 @@ def main():
             wait_for(lambda: b"Ready" in output, "native renderer startup")
             # Trailing question text keeps the @ picker closed when Enter submits.
             os.write(master, b"Update @sample.ts please\r")
-            wait_for(lambda: b"/apply to approve" in output, "completion and diff review")
+            wait_for(lambda: b"/review to inspect" in output, "completion and proposal summary")
             assert target.read_text() == "const x = 1;\n", "proposal wrote without approval"
+            os.write(master, b"/review\r")
+            wait_for(lambda: b"+const x = 2;" in output, "diff review")
             os.write(master, b"/apply\r")
             wait_for(lambda: target.read_text() == "const x = 2;\n", "approved write")
             assert len(requests) == 1, "local approval issued another model request"

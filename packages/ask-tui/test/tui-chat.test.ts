@@ -9,6 +9,7 @@ import { chatRefs, TuiChat } from "../src/chat.ts";
 import { mentionCandidates } from "@codehaus-au/ask/internal/refs";
 import { MAX_SKILL_BYTES, SkillResolutionError } from "@codehaus-au/ask/internal/skills";
 import { collectContext } from "@codehaus-au/ask/internal/context";
+import { DEFAULT_SESSION_MAX_TOKENS, estimateTokens } from "@codehaus-au/ask/internal/session";
 
 function block(target: string, search: string, replacement: string) {
   return `<update path=${JSON.stringify(target)}>\n<<<<<<< SEARCH\n${search}\n=======\n${replacement}\n>>>>>>> REPLACE\n</update>`;
@@ -387,5 +388,122 @@ test("in-flight submissions are rejected without an extra request", async () => 
     });
     await pending;
     assert.equal(calls, 1);
+  } finally { await rm(cwd, { recursive: true, force: true }); }
+});
+
+test("typed mentions must name an existing path; \\@ sends a literal @ without attaching", async () => {
+  const cwd = await mkdtemp(path.join(tmpdir(), "ask-tui-mentions-"));
+  try {
+    await mkdir(path.join(cwd, "src"));
+    await writeFile(path.join(cwd, "src", "Injectable.ts"), "export const Injectable = 1;\n");
+    const { client, requests } = clientWith([{ text: "Answer" }]);
+    const chat = new TuiChat(client, { cwd });
+    // A fuzzy match exists, but a typed word must never silently attach it.
+    await assert.rejects(chat.submit("Why does @Injectable fail?"), /not a file or folder here[\s\S]*\\@/);
+    assert.equal(requests.length, 0);
+    assert.deepEqual(chat.attachmentPaths, []);
+    await chat.submit("Why does \\@Injectable fail? See @src/Injectable.ts");
+    const content = String(requests[0]!.messages.at(-1)!.content);
+    assert.match(content, /^Why does @Injectable fail\? See @src\/Injectable\.ts/);
+    assert.deepEqual(chat.attachmentPaths, ["src/Injectable.ts"]);
+  } finally { await rm(cwd, { recursive: true, force: true }); }
+});
+
+test("attachments deleted between requests are dropped and reported, not fatal", async () => {
+  const cwd = await mkdtemp(path.join(tmpdir(), "ask-tui-missing-"));
+  try {
+    await writeFile(path.join(cwd, "a.ts"), "a\n");
+    await writeFile(path.join(cwd, "b.ts"), "b\n");
+    const { client, requests } = clientWith([{ text: "One" }, { text: "Two" }]);
+    const chat = new TuiChat(client, { cwd });
+    await chat.submit("Compare @a.ts and @b.ts");
+    await rm(path.join(cwd, "a.ts"));
+    const reply = await chat.submit("And now?");
+    assert.deepEqual(reply.missing, ["a.ts"]);
+    assert.deepEqual(chat.attachmentPaths, ["b.ts"]);
+    assert.equal(requests.length, 2);
+  } finally { await rm(cwd, { recursive: true, force: true }); }
+});
+
+test("review, apply and reject work per file; unreviewed files cannot be applied", async () => {
+  const cwd = await mkdtemp(path.join(tmpdir(), "ask-tui-per-file-"));
+  try {
+    for (const name of ["a.ts", "b.ts", "c.ts"]) await writeFile(path.join(cwd, name), "old\n");
+    const { client, requests } = clientWith([
+      { text: [block("a.ts", "old", "A"), block("b.ts", "old", "B"), block("c.ts", "old", "C")].join("\n") },
+    ]);
+    const chat = new TuiChat(client, { cwd });
+    assert.throws(() => chat.reject(), /No pending edits/);
+    await chat.submit("Fix @a.ts @b.ts @c.ts");
+    assert.deepEqual(chat.pendingSummary.map((file) => [file.path, file.added, file.removed]), [["a.ts", 1, 1], ["b.ts", 1, 1], ["c.ts", 1, 1]]);
+    chat.review(["a.ts"]);
+    await assert.rejects(chat.apply(), /Not yet reviewed: "b.ts", "c.ts"/);
+    await assert.rejects(chat.apply(["b.ts"]), /Not yet reviewed: "b.ts"/);
+    assert.throws(() => chat.review(["missing.ts"]), /No pending edit for "missing.ts"/);
+    assert.deepEqual(await chat.apply(["@a.ts"]), ["a.ts"]);
+    assert.equal(chat.pendingCount, 2);
+    assert.deepEqual(chat.reject(["./c.ts"]), ["c.ts"]);
+    assert.equal(chat.pendingCount, 1);
+    chat.review();
+    assert.deepEqual(await chat.apply(), ["b.ts"]);
+    assert.equal(chat.pendingCount, 0);
+    assert.deepEqual(await Promise.all(["a.ts", "b.ts", "c.ts"].map((name) => readFile(path.join(cwd, name), "utf8"))), ["A\n", "B\n", "old\n"]);
+    assert.equal(requests.length, 1, "review and approval are local");
+  } finally { await rm(cwd, { recursive: true, force: true }); }
+});
+
+/** Estimated size of a whole request, as the controller estimates it. */
+function requestTokens(request: OneShotRequest): number {
+  return request.messages.reduce((sum, message) => sum + estimateTokens(String(message.content)), 0);
+}
+
+test("with a context window, oldest history is dropped so every request fits", async () => {
+  const cwd = await mkdtemp(path.join(tmpdir(), "ask-tui-history-window-"));
+  try {
+    const answer = "x".repeat(1600); // about 400 estimated tokens
+    const { client, requests } = clientWith(Array.from({ length: 6 }, () => ({ text: answer })));
+    const chat = new TuiChat(client, { cwd, contextWindow: 2000, maxTokens: 100 });
+    const usable = Math.floor(2000 * 0.9) - 100;
+    let dropped = 0;
+    for (let turn = 1; turn <= 6; turn++) dropped += (await chat.submit(`question ${turn}`)).historyDropped;
+    assert.ok(dropped > 0, "history must eventually be trimmed");
+    for (const request of requests) {
+      assert.ok(requestTokens(request) <= usable, `request of ${requestTokens(request)} tokens exceeds ${usable}`);
+      const history = request.messages.filter((message) => message.role !== "system").slice(0, -1);
+      if (history.length) assert.equal(history[0]!.role, "user", "history restarts at a question");
+    }
+    assert.match(String(requests.at(-1)!.messages.at(-1)!.content), /^question 6/);
+  } finally { await rm(cwd, { recursive: true, force: true }); }
+});
+
+test("a message too large for the context window is refused before sending, keeping history", async () => {
+  const cwd = await mkdtemp(path.join(tmpdir(), "ask-tui-history-oversize-"));
+  try {
+    await writeFile(path.join(cwd, "big.ts"), "y".repeat(2000)); // about 500 estimated tokens
+    const { client, requests } = clientWith([{ text: "First." }, { text: "Second." }]);
+    const chat = new TuiChat(client, { cwd, contextWindow: 600, maxTokens: 100 });
+    await chat.submit("small question");
+    await assert.rejects(chat.submit("Explain @big.ts"), /context window[\s\S]*Detach files/);
+    assert.equal(requests.length, 1, "nothing was sent");
+    assert.equal(chat.lastAnswer, "First.");
+    chat.detach("big.ts");
+    await chat.submit("another small question");
+    assert.deepEqual(requests[1]!.messages.filter((message) => message.role !== "system").map((message) => message.content).slice(0, 2),
+      ["small question", "First."], "the earlier exchange was not trimmed by the refused request");
+  } finally { await rm(cwd, { recursive: true, force: true }); }
+});
+
+test("without a context window, resent history alone is capped at the CLI default", async () => {
+  const cwd = await mkdtemp(path.join(tmpdir(), "ask-tui-history-default-"));
+  try {
+    const answer = "z".repeat(70_000); // about 17,500 estimated tokens
+    const { client, requests } = clientWith([{ text: answer }, { text: answer }, { text: "short" }]);
+    const chat = new TuiChat(client, { cwd });
+    await chat.submit("first");
+    assert.equal((await chat.submit("second")).historyDropped, 0);
+    assert.equal((await chat.submit("third")).historyDropped, 2, "two long answers exceed 32,000 tokens");
+    const history = requests[2]!.messages.filter((message) => message.role !== "system").slice(0, -1);
+    assert.deepEqual(history.map((message) => message.content), ["second", answer]);
+    assert.ok(history.reduce((sum, message) => sum + estimateTokens(String(message.content)), 0) <= DEFAULT_SESSION_MAX_TOKENS);
   } finally { await rm(cwd, { recursive: true, force: true }); }
 });

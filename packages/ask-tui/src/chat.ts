@@ -1,11 +1,13 @@
 // UI-independent chat controller. Only submit() can ask the model, exactly once.
+import { stat } from "node:fs/promises";
 import path from "node:path";
 import { askOnce, buildRequest, DEFAULT_MODEL, type ChatClient, type HistoryMessage, type TokenField } from "@codehaus-au/ask/internal/chat";
 import { collectContext, type ContextResult, type LimitOverrides } from "@codehaus-au/ask/internal/context";
-import { applyUpdates, captureEditableFiles, parseUpdates, prepareUpdates, UPDATE_SYSTEM, updateDiff, type ProposedUpdate } from "./updates.ts";
+import { applyUpdates, captureEditableFiles, parseUpdates, prepareUpdates, sensitivePathReason, UPDATE_SYSTEM, updateDiff, updateSummary, type ProposedUpdate, type UpdateSummary } from "./updates.ts";
 import { discoverSkills, filterSkills, loadSkill, renderSkills, resolveSkill, skillSearchPaths, type LoadedSkill, type SkillSummary } from "@codehaus-au/ask/internal/skills";
 import { terminalField } from "@codehaus-au/ask/internal/terminal";
-import { resolveRef } from "@codehaus-au/ask/internal/refs";
+import { hasGlobMagic, resolveRef, type Resolution } from "@codehaus-au/ask/internal/refs";
+import { DEFAULT_SESSION_MAX_TOKENS, estimateTokens } from "@codehaus-au/ask/internal/session";
 import { chatRefs } from "./mentions.ts";
 export { chatRefs } from "./mentions.ts";
 
@@ -24,12 +26,23 @@ export interface TuiChatOptions {
   readonly tokenField?: TokenField | undefined;
   readonly limits?: LimitOverrides;
   readonly skillRoots?: readonly string[];
-  /** Explicit model capacity; never inferred from a model name or endpoint. */
+  /** Explicit model capacity; never inferred from a model name or endpoint.
+   * When set, resent history is trimmed so the estimated request fits it. */
   readonly contextWindow?: number | undefined;
 }
 
+/** Share of the context window left unused: token counts here are only estimates. */
+const WINDOW_MARGIN = 0.1;
+/** Room kept for the answer when --max-tokens is not set (at most a quarter of the window). */
+const DEFAULT_ANSWER_RESERVE = 4096;
+
+/** `\@` keeps a literal @ out of mention parsing; the model sees a plain @. */
+function unescapeMentions(text: string): string {
+  return text.replace(/\\@/g, "@");
+}
+
 function attachmentMessage(text: string, context: ContextResult): string {
-  return [text, ...context.blocks.map((block) =>
+  return [unescapeMentions(text), ...context.blocks.map((block) =>
     `<file path=${JSON.stringify(block.path)}${block.truncated ? ' truncated="true"' : ""}>\n${block.text}\n</file>`),
   ].join("\n\n");
 }
@@ -39,6 +52,10 @@ export interface ChatReply {
   readonly context: ContextResult;
   readonly status: string;
   readonly proposalError: string | null;
+  /** Attachments removed because they no longer exist. */
+  readonly missing: readonly string[];
+  /** Oldest history messages dropped to fit the context window (or the default history cap). */
+  readonly historyDropped: number;
 }
 
 export interface TuiSessionStats {
@@ -60,7 +77,9 @@ export class TuiChat {
   private readonly history: HistoryMessage[] = [];
   private attachments: string[] = [];
   private pending: ProposedUpdate[] = [];
-  private reviewed = false;
+  private reviewed = new Set<string>();
+  /** Dropped history not yet reported, including drops before a failed request. */
+  private unreportedDrops = 0;
   private busy = false;
   private skills: LoadedSkill[] = [];
   private turns = 0;
@@ -83,6 +102,7 @@ export class TuiChat {
 
   get attachmentPaths(): readonly string[] { return this.attachments.map((file) => path.relative(this.options.cwd, file) || "."); }
   get pendingCount(): number { return this.pending.length; }
+  get pendingSummary(): readonly UpdateSummary[] { return this.pending.map(updateSummary); }
   get activeSkillNames(): readonly string[] { return this.skills.map((skill) => skill.name); }
   get excludedFilePaths(): readonly string[] { return [...this.excludedFiles].map((file) => path.relative(this.options.cwd, file)); }
   get lastAnswer(): string | null { return this.history.findLast((message) => message.role === "assistant")?.content ?? null; }
@@ -96,6 +116,69 @@ export class TuiChat {
   }
 
   private get skillRoots(): readonly string[] { return this.options.skillRoots ?? skillSearchPaths(this.options.cwd); }
+
+  /** Typed mentions name an existing path or a glob. Fuzzy search belongs to the
+   * @ picker, so an @word in a question can never silently attach another file.
+   */
+  private async resolveMention(ref: string): Promise<Resolution> {
+    const error = () => new Error(`@${ref} is not a file or folder here. Pick one from the @ menu, or type \\@ for a literal @.`);
+    if (!hasGlobMagic(ref) && !await stat(path.resolve(this.options.cwd, ref)).catch(() => null)) throw error();
+    const resolution = await resolveRef(ref, { cwd: this.options.cwd });
+    if (resolution.kind === "search") throw error();
+    return resolution;
+  }
+
+  /** Drop attachments deleted since they were added, instead of failing every request. */
+  private async pruneMissing(): Promise<string[]> {
+    const present = await Promise.all(this.attachments.map((file) => stat(file).then(() => true, () => false)));
+    const missing = this.attachments.filter((_, index) => !present[index]);
+    this.attachments = this.attachments.filter((_, index) => present[index]);
+    return missing.map((file) => path.relative(this.options.cwd, file) || ".");
+  }
+
+  /**
+   * Room for resent history. With a known context window, everything else in the
+   * request (system prompt, message, attachments, answer reserve) comes first, and
+   * a request that cannot fit even without history is refused before sending.
+   * Without one, history alone is capped at the CLI's session default.
+   */
+  private historyBudget(requestTokens: number): number {
+    const window = this.options.contextWindow;
+    if (window === undefined) return DEFAULT_SESSION_MAX_TOKENS;
+    const answer = this.options.maxTokens ?? Math.min(DEFAULT_ANSWER_RESERVE, Math.floor(window / 4));
+    const usable = Math.floor(window * (1 - WINDOW_MARGIN)) - answer;
+    if (requestTokens > usable) {
+      throw new Error(`This message needs about ${requestTokens.toLocaleString("en-US")} tokens before any history ` +
+        `(system prompt, message and attachments, estimated), but only ${Math.max(0, usable).toLocaleString("en-US")} of the ` +
+        `${window.toLocaleString("en-US")}-token context window are available after reserving ${answer.toLocaleString("en-US")} ` +
+        "for the answer and a 10% estimate margin. Detach files, or raise --context-window if the model allows more.");
+    }
+    return usable - requestTokens;
+  }
+
+  /** Oldest messages go first; history always restarts at a user message. */
+  private trimHistory(budget: number): void {
+    let total = this.history.reduce((sum, message) => sum + estimateTokens(message.content), 0);
+    let dropped = 0;
+    while (this.history.length && (total > budget || this.history[0]!.role !== "user")) {
+      total -= estimateTokens(this.history.shift()!.content);
+      dropped++;
+    }
+    this.unreportedDrops += dropped;
+  }
+
+  /** Pending proposals named by path (all when none are named). */
+  private selectPending(paths: readonly string[]): ProposedUpdate[] {
+    if (!this.pending.length) throw new Error("No pending edits.");
+    if (!paths.length) return [...this.pending];
+    const key = (file: string) => path.resolve(this.options.cwd, file.replace(/^@/, ""));
+    const wanted = new Set(paths.map(key));
+    const unknown = paths.filter((file) => !this.pending.some((update) => key(update.path) === key(file)));
+    if (unknown.length) {
+      throw new Error(`No pending edit for ${unknown.map((file) => JSON.stringify(file)).join(", ")}. Pending: ${this.pending.map((update) => JSON.stringify(update.path)).join(", ")}.`);
+    }
+    return this.pending.filter((update) => wanted.has(key(update.path)));
+  }
 
   availableSkills(): Promise<SkillSummary[]> { return discoverSkills(this.skillRoots); }
 
@@ -143,7 +226,8 @@ export class TuiChat {
       // Keep the user's selected file, rather than silently resolving a different
       // skill if discovery precedence changes. Missing/oversized skills fail closed.
       const skills = await Promise.all(this.skills.map((skill) => loadSkill(skill, skill.matched)));
-      const added = await Promise.all(chatRefs(text).map((ref) => resolveRef(ref, { cwd: this.options.cwd })));
+      const missing = await this.pruneMissing();
+      const added = await Promise.all(chatRefs(text).map((ref) => this.resolveMention(ref)));
       const addedPaths = added.flatMap((resolution) => resolution.paths);
       // A fresh explicit mention restores that file/folder. Merely retaining an
       // old folder reference must not silently undo the user's file exclusions.
@@ -161,10 +245,13 @@ export class TuiChat {
       this.excludedFiles = excluded;
       this.files = context.blocks.map((block) => block.path);
       onContextReady?.();
+      const prompt = attachmentMessage(text, context);
+      const system = [this.options.system, renderSkills(skills), UPDATE_SYSTEM].filter(Boolean).join("\n\n");
+      this.trimHistory(this.historyBudget(estimateTokens(system) + estimateTokens(prompt)));
       const result = await askOnce(this.client, buildRequest({
-        prompt: attachmentMessage(text, context),
+        prompt,
         model: this.options.model ?? DEFAULT_MODEL,
-        system: [this.options.system, renderSkills(skills), UPDATE_SYSTEM].filter(Boolean).join("\n\n"),
+        system,
         history: this.history,
         baseURL: this.options.baseURL,
         maxTokens: this.options.maxTokens,
@@ -176,7 +263,7 @@ export class TuiChat {
       this.lastOutput = result.usage.output;
       if (result.usage.input !== null) { this.totalInput += result.usage.input; this.inputTurns++; }
       if (result.usage.output !== null) { this.totalOutput += result.usage.output; this.outputTurns++; }
-      this.history.push({ role: "user", content: text }, { role: "assistant", content: result.text });
+      this.history.push({ role: "user", content: unescapeMentions(text) }, { role: "assistant", content: result.text });
       let proposalError: string | null = null;
       try {
         if (result.finishReason !== "stop") {
@@ -187,30 +274,41 @@ export class TuiChat {
         this.pending = [];
         proposalError = error instanceof Error ? error.message : String(error);
       }
-      this.reviewed = false;
+      this.reviewed.clear();
+      const historyDropped = this.unreportedDrops;
+      this.unreportedDrops = 0;
       return {
-        text: result.text, context, proposalError,
+        text: result.text, context, proposalError, missing, historyDropped,
         status: `${result.model} · ${context.blocks.length} file(s) · skills ${skills.map((skill) => terminalField(skill.name)).join(", ") || "none"} · tokens ${result.usage.input ?? "?"} in / ${result.usage.output ?? "?"} out`,
       };
     } finally { this.busy = false; }
   }
 
-  review(): string[] {
-    if (!this.pending.length) throw new Error("No pending edits.");
-    this.reviewed = true;
-    return this.pending.map(updateDiff);
+  /** Diffs for pending files (all when none are named); only reviewed files can be applied. */
+  reviewDetails(paths: readonly string[] = []): { path: string; diff: string; sensitive: string | null }[] {
+    const selected = this.selectPending(paths);
+    for (const update of selected) this.reviewed.add(update.path);
+    return selected.map((update) => ({ path: update.path, diff: updateDiff(update), sensitive: sensitivePathReason(update.path) }));
   }
 
-  async apply(): Promise<string[]> {
+  review(paths: readonly string[] = []): string[] {
+    return this.reviewDetails(paths).map((detail) => detail.diff);
+  }
+
+  /** Write reviewed proposals (all when none are named). Others stay pending. */
+  async apply(paths: readonly string[] = []): Promise<string[]> {
     if (this.busy) throw new Error("A request or write is already in progress.");
-    if (!this.pending.length || !this.reviewed) throw new Error("Use /review before /apply.");
+    const selected = this.selectPending(paths);
+    const unreviewed = selected.filter((update) => !this.reviewed.has(update.path));
+    if (unreviewed.length) {
+      throw new Error(`Use /review before /apply. Not yet reviewed: ${unreviewed.map((update) => JSON.stringify(update.path)).join(", ")}.`);
+    }
     this.busy = true;
-    const pending = this.pending;
     // Failed/partially applied proposals must not be retried against stale snapshots.
-    this.pending = [];
-    this.reviewed = false;
+    this.pending = this.pending.filter((update) => !selected.includes(update));
+    for (const update of selected) this.reviewed.delete(update.path);
     try {
-      const paths = await applyUpdates(pending);
+      const paths = await applyUpdates(selected);
       this.history.push({ role: "user", content: `Local edit decision: approved and applied updates to ${JSON.stringify(paths)}.` });
       return paths;
     } catch (error) {
@@ -219,11 +317,15 @@ export class TuiChat {
     } finally { this.busy = false; }
   }
 
-  reject(): void {
+  /** Discard proposals (all when none are named); returns the discarded paths. */
+  reject(paths: readonly string[] = []): string[] {
     if (this.busy) throw new Error("A request or write is already in progress.");
-    this.pending = [];
-    this.reviewed = false;
-    this.history.push({ role: "user", content: "Local edit decision: rejected pending proposals; no files were written." });
+    const selected = this.selectPending(paths);
+    this.pending = this.pending.filter((update) => !selected.includes(update));
+    for (const update of selected) this.reviewed.delete(update.path);
+    const rejected = selected.map((update) => update.path);
+    this.history.push({ role: "user", content: `Local edit decision: rejected proposals for ${JSON.stringify(rejected)}; those files were not written.` });
+    return rejected;
   }
 
   /** Explicit local attachment selection, with no model request or file writes. */
@@ -231,6 +333,7 @@ export class TuiChat {
     if (this.busy || this.pending.length) throw new Error("Finish the current request or resolve pending edits first.");
     this.busy = true;
     try {
+      await this.pruneMissing();
       const added = await resolveRef(ref, { cwd: this.options.cwd });
       const excluded = new Set([...this.excludedFiles].filter((file) => !added.paths.some((parent) => containsPath(parent, file))));
       const context = await collectContext([...new Set([...this.attachments, ...added.paths])], {
@@ -268,7 +371,7 @@ export class TuiChat {
     this.history.length = 0;
     this.attachments = [];
     this.pending = [];
-    this.reviewed = false;
+    this.reviewed.clear();
     this.skills = [];
     this.turns = 0;
     this.lastInput = null;
@@ -279,5 +382,6 @@ export class TuiChat {
     this.outputTurns = 0;
     this.files = [];
     this.excludedFiles.clear();
+    this.unreportedDrops = 0;
   }
 }

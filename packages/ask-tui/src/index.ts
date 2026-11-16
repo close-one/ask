@@ -25,7 +25,9 @@ Ctrl+D always exits. /help lists commands.
 --skill selects instructions for this chat; repeat to compose skills.
 --list-skills lists discovered skills offline; no key or terminal required.
 --context-window overrides ASK_CONTEXT_WINDOW (positive integer tokens).
-Capacity and percent used are display-only; no model lookup or server changes.
+It is never looked up. When set, the oldest history is dropped so each estimated
+request fits, and a message too large even without history is refused before
+sending. Without it, resent history is capped at about 32000 tokens.
 --timeout overrides ASK_TIMEOUT; default 120 seconds per request, no retries.
 --theme overrides ASK_THEME; default ask. Use /theme to preview and change themes.
 --no-mouse leaves mouse selection to your terminal; /copy uses OSC52.
@@ -109,10 +111,10 @@ async function main() {
   process.once("SIGTERM", stop);
   process.once("SIGHUP", stop);
   try {
-    const ui = mountChatUI(renderer, chat, model, { theme });
-    for (const report of reports) {
-      if (report.ignored?.length) process.stderr.write(`Ignored .env keys: ${report.ignored.map(terminalField).join(", ")}\n`);
-    }
+    // Shown in the transcript: stderr would be drawn over (or under) the UI.
+    const notices = reports.flatMap((report) => report.ignored?.length
+      ? [`Ignored .env keys in ${terminalField(report.file)}: ${report.ignored.map(terminalField).join(", ")}`] : []);
+    const ui = mountChatUI(renderer, chat, model, { theme, notices });
     void mentionCandidates(cwd).then(
       (index) => ui.setCandidates(index.paths, index.truncated),
       (error: unknown) => ui.setIndexError(`Mention index unavailable: ${String(error)}`),

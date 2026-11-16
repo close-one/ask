@@ -15,6 +15,8 @@ export { SIDEBAR_MIN_WIDTH, SIDEBAR_MIN_COLUMNS, CHAT_MIN_COLUMNS } from "./layo
 export interface TuiUIOptions {
   readonly theme?: string;
   readonly createClipboard?: ClipboardFactory;
+  /** Startup warnings, shown in the transcript rather than written over the UI. */
+  readonly notices?: readonly string[];
 }
 
 /** Coordinates components and the single in-flight submission/write lifecycle. */
@@ -42,7 +44,7 @@ export function mountChatUI(renderer: CliRenderer, chat: TuiChat, model: string,
   }
   function addText(content: string, color?: string) { if (state.alive) view.addText(content, color); }
   completion = createCompletion(renderer, chat, layout, theme, state, { submit, refreshSummary, applyTheme, addText });
-  const review = () => view.review(chat.review());
+  const review = (paths: readonly string[]) => view.review(chat.reviewDetails(paths));
 
   async function submit() {
     if (state.working || !state.alive) return;
@@ -50,10 +52,7 @@ export function mountChatUI(renderer: CliRenderer, chat: TuiChat, model: string,
     if (!text) return;
     clipboard.submitted();
     state.working = true; picker.visible = false; input.setText("");
-    const started = Date.now();
-    const timer = setInterval(() => {
-      if (state.alive) status.content = `Waiting for ${terminalField(model)}… ${((Date.now() - started) / 1000).toFixed(1)}s · no automatic follow-up`;
-    }, 250);
+    let timer: ReturnType<typeof setInterval> | undefined;
     try {
       const command = await dispatchCommand(text, chat, {
         quit: () => renderer.destroy(), clear: view.clear, review, copy: clipboard.copyText,
@@ -62,15 +61,25 @@ export function mountChatUI(renderer: CliRenderer, chat: TuiChat, model: string,
       if (command === "return" || !state.alive) return;
       if (command === "prompt") {
         view.addUserMessage(text); status.content = `Waiting for ${terminalField(model)}…`;
+        // Only a model request shows the waiting timer; local commands do not.
+        const started = Date.now();
+        timer = setInterval(() => {
+          if (state.alive) status.content = `Waiting for ${terminalField(model)}… ${((Date.now() - started) / 1000).toFixed(1)}s · no automatic follow-up`;
+        }, 250);
         const reply = await chat.submit(text, refreshSummary);
         if (!state.alive) return;
+        if (reply.missing.length) addText(`Removed attachments that no longer exist: ${reply.missing.map(terminalField).join(", ")}`, "#fcd34d");
+        if (reply.historyDropped) {
+          const limit = chat.sessionStats.contextWindow === null ? "the default history cap (set --context-window to use your model's limit)" : "the context window";
+          addText(`Dropped the ${reply.historyDropped} oldest history message(s) to fit ${limit}. Attached files are still sent in full.`, "#fcd34d");
+        }
         view.addAnswer(reply.text);
         if (reply.context.skipped.length) addText(`Skipped context: ${reply.context.skipped.map((item) => `${terminalField(item.path)} (${item.reason})`).join(", ")}`, "#fcd34d");
         if (reply.context.truncated) addText("Context was truncated; truncated files cannot be updated.", "#fcd34d");
         if (reply.proposalError) addText(`Edits unavailable: ${reply.proposalError}`, "#fcd34d");
-        if (chat.pendingCount) review();
+        if (chat.pendingCount) view.proposals(chat.pendingSummary);
       }
-      if (state.alive) status.content = chat.pendingCount ? `${chat.pendingCount} pending file(s) · /apply to approve · /reject to discard` : "Ready · /help for commands";
+      if (state.alive) status.content = chat.pendingCount ? `${chat.pendingCount} pending file(s) · /review to inspect · /apply to approve · /reject to discard` : "Ready · /help for commands";
     } catch (error) {
       if (state.alive) {
         addText(error instanceof Error ? error.message : String(error), "#fda4af");
@@ -79,7 +88,8 @@ export function mountChatUI(renderer: CliRenderer, chat: TuiChat, model: string,
         if (!input.plainText) { input.setText(text); input.gotoBufferEnd(); }
       }
     } finally {
-      clearInterval(timer); state.working = false;
+      if (timer) clearInterval(timer);
+      state.working = false;
       if (state.alive) { input.focus(); completion!.refresh(); refreshSummary(); }
     }
   }
@@ -111,6 +121,7 @@ export function mountChatUI(renderer: CliRenderer, chat: TuiChat, model: string,
     view.dispose();
   });
   addText("Ask a question or discuss a function. Attach @files or @folders anywhere.\nSuggested <update> blocks become reviewable diffs, never automatic writes. /help for commands.");
+  for (const notice of options.notices ?? []) addText(notice, "#fcd34d");
   if (chat.activeSkillNames.length) addText(`Active skills: ${chat.activeSkillNames.map(terminalField).join(", ")}`);
   refreshSummary();
   return {

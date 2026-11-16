@@ -27,7 +27,7 @@ _ASK_FLAGS="--all-matches --allow-insecure-http --api-key --apply --base-url --c
 --help --install-completion \
 --include-secrets --json --max-file-bytes --max-files --max-tokens \
 --list-sessions --list-skills --max-total-bytes --model --new --no-color \
---no-next \
+--no-instructions --no-next \
 --no-session \
 --quiet --raw --reset \
 --session --show-config \

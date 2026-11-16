@@ -5,6 +5,7 @@ import { parseArgs } from "node:util";
 import { createClient, DEFAULT_MODEL, isInsecureHttpEndpoint, isLoopbackEndpoint } from "@codehaus-au/ask/internal/chat";
 import { describeSettings, flagLayer, globalConfigDir, loadSettings } from "@codehaus-au/ask/internal/config";
 import { legacyEnvNotice } from "@codehaus-au/ask/internal/env";
+import { loadInstructions, renderInstructions } from "@codehaus-au/ask/internal/instructions";
 import { mentionCandidates } from "@codehaus-au/ask/internal/refs";
 import { terminalField } from "@codehaus-au/ask/internal/terminal";
 import { DEFAULT_RESPONSE_TIMEOUT_MS, timeoutSecondsToMs } from "@codehaus-au/ask/internal/timeout";
@@ -17,13 +18,15 @@ Usage: ask-tui [--model <id>] [--base-url <url>] [--api-key <key>]
                [--system <text>] [--max-tokens <n>] [--temperature <n>]
                [--allow-insecure-http] [--skill <name>]... [--list-skills]
                [--context-window <tokens>] [--timeout <seconds>] [--theme <name>] [--no-mouse]
-               [--config <dir>] [--show-config]
+               [--config <dir>] [--show-config] [--no-instructions]
 Configuration is shared with ask (lowest precedence first): ~/.config/ask/ (or
 $XDG_CONFIG_HOME/ask), --config <dir> or $ASK_CONFIG, the project's ask.json(c),
 its .ask/ directory, $ASK_CONFIG_CONTENT, ASK_* variables, then flags. TUI settings
 go in tui.json(c): theme, contextWindow, mouse. A project cannot choose the
 endpoint or key, or use {env:VAR}, until you run: ask /trust
 --show-config prints each setting and where it came from.
+AGENTS.md from each config directory and the project root, plus configured
+instructions files, are added to the system prompt; --no-instructions skips them.
 One request per submission; no model tools, automatic retries or agent loop.
 Mention @files or @folders anywhere. Suggested updates require review and /apply.
 History is in memory for this TUI only. Ctrl+C copies a selection, otherwise exits.
@@ -48,7 +51,7 @@ async function main() {
     skill: { type: "string", multiple: true }, "list-skills": { type: "boolean" },
     "context-window": { type: "string" }, "no-mouse": { type: "boolean" },
     timeout: { type: "string" }, theme: { type: "string" },
-    config: { type: "string" }, "show-config": { type: "boolean" },
+    config: { type: "string" }, "show-config": { type: "boolean" }, "no-instructions": { type: "boolean" },
   } });
   if (values.help) { process.stdout.write(HELP); return; }
   if (!("Bun" in globalThis)) throw new Error("ask-tui requires Bun 1.3.14+; the existing ask CLI still runs on Node.");
@@ -106,6 +109,10 @@ async function main() {
       pairing.map((note) => `\n${note}`).join("") + (legacy ? `\n${legacy}` : "") +
       "\nRun ask-tui --show-config to see where each setting comes from.");
   }
+  const readInstructions = () => values["no-instructions"]
+    ? Promise.resolve({ files: [], notes: [] })
+    : loadInstructions(loaded.instructions, loaded.projectRoot);
+  const startupInstructions = await readInstructions();
   const lifetime = new AbortController();
   const chat = new TuiChat(createClient({
     apiKey, baseURL, organization: settings.endpoint.organization, project: settings.endpoint.project,
@@ -114,6 +121,7 @@ async function main() {
     cwd, model, baseURL, system: settings.system ?? "",
     maxTokens: settings.maxTokens, temperature: settings.temperature,
     contextWindow: settings.tui.contextWindow,
+    instructions: async () => renderInstructions((await readInstructions()).files),
   });
   await chat.selectSkills(values.skill ?? []);
   // Never load the native UI from the existing Node entry point or offline help.
@@ -128,7 +136,10 @@ async function main() {
   process.once("SIGHUP", stop);
   try {
     // Shown in the transcript: stderr would be drawn over (or under) the UI.
-    const notices = loaded.notes.map((note) => note.charAt(0).toUpperCase() + note.slice(1));
+    const notices = [...loaded.notes, ...startupInstructions.notes].map((note) => note.charAt(0).toUpperCase() + note.slice(1));
+    if (startupInstructions.files.length) {
+      notices.push(`Instructions: ${startupInstructions.files.map((file) => terminalField(file.display)).join(", ")}`);
+    }
     const ui = mountChatUI(renderer, chat, model, { theme, notices });
     void mentionCandidates(cwd).then(
       (index) => ui.setCandidates(index.paths, index.truncated),

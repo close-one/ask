@@ -81,9 +81,10 @@ chmod 600 ~/.config/ask/ask.jsonc
 
 | File | Holds |
 | --- | --- |
-| `ask.json` or `ask.jsonc` | common settings: `endpoint` (`url`, `apiKey`, `organization`, `project`), `model`, `system`, `temperature`, `maxTokens`, `timeout` (seconds) |
+| `ask.json` or `ask.jsonc` | common settings: `endpoint` (`url`, `apiKey`, `organization`, `project`), `model`, `system`, `temperature`, `maxTokens`, `timeout` (seconds), `instructions` |
 | `cli.json` or `cli.jsonc` | CLI settings: `sessionMaxTokens`, `next` |
 | `tui.json` or `tui.jsonc` | TUI settings: `theme`, `contextWindow`, `mouse` |
+| `AGENTS.md` | personal or project instructions added to every request (see below) |
 | `skills/<name>/` | skills, in the global directory and the project's `.ask/` (see [Skills](#skills)) |
 
 **Layers**, lowest precedence first; later layers win:
@@ -100,6 +101,23 @@ Objects merge key by key, other values are replaced, and `null` removes a lower
 layer's value (for example `"system": null`). An empty string means "not set".
 `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_ORG_ID` and `OPENAI_PROJECT_ID` are
 used only when no layer sets the endpoint: other tools use those names too.
+
+**Instructions.** `AGENTS.md` in each config directory (global, `--config`, the
+project's `.ask/`) and in the project root is added to the system prompt, after
+`system` and before any skills. Parent directories of the project root are never
+searched. `instructions` lists more files or globs, relative to the file that
+lists them; lists from different layers are joined, and `null` clears earlier
+ones (`AGENTS.md` files stay; use `--no-instructions` to skip everything):
+
+```json
+{ "instructions": ["~/notes/style.md", "rules/*.md"] }
+```
+
+Each run names the instruction files it used on stderr. Files are capped at
+64 KB each and 256 KB in total; missing, binary or credential-like files are
+skipped with a note, and nothing is guessed from a similar name. A project's
+`AGENTS.md` and instructions are the repository's text: until `ask /trust`, a
+project may only list files inside itself, and a symlink leading out is not read.
 
 **`{env:NAME}`** inside any string is replaced by that variable's value, so a
 key can stay out of the file: `"apiKey": "{env:WORK_LLM_KEY}"`. An unset
@@ -447,6 +465,7 @@ when Git cannot verify the undo copy.
 | `--api-key <key>` | API key (env `OPENAI_API_KEY`) |
 | `--config <dir>` | add a config directory (also `ASK_CONFIG`); see [Configuration](#configuration) |
 | `--show-config` / `/config` | print every setting and where it came from |
+| `--no-instructions` | skip `AGENTS.md` and `instructions` files for this run |
 | `/trust` / `/untrust` | allow or withdraw this project's endpoint and `{env:}` settings |
 | `-f, --file <path>` | attach a path explicitly; repeatable |
 | `--max-tokens <n>` / `--temperature <n>` | only sent when set |
@@ -1010,6 +1029,7 @@ src/context.ts        resolved paths → sorted, filtered, capped text blocks
 src/chat.ts           request builder + one-shot transport (no tools by construction)
 src/options.ts        the flag table, shared with the completion test
 src/config.ts         layered JSON config, {env:} substitution, project trust
+src/instructions.ts   AGENTS.md and instruction files for the system prompt
 src/env.ts            reads old .env files only to explain they are unused
 src/cli.ts            flags, stdin, output modes
 completions/ask.bash  bash/zsh completion + optional fzf picker

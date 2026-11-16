@@ -59,6 +59,16 @@ for (const layout of ["src", "dist/src"]) {
     assert.doesNotMatch(`${stdout}${stderr}`, /private-|repository-/);
     assert.equal((await runCli(entry, ["--quiet", "--dry-run", "hello"], cwd, env)).stderr, "");
 
+    // AGENTS.md from the config directory, then the project root, after the system prompt.
+    await writeFile(path.join(xdg, "ask", "AGENTS.md"), "personal-rules");
+    await writeFile(path.join(cwd, "AGENTS.md"), "project-rules");
+    const withInstructions = await runCli(entry, ["--dry-run", "hello"], cwd, env);
+    assert.match(JSON.parse(withInstructions.stdout).messages[0].content,
+      /^project-system\n\n<instructions source="[^"]*AGENTS\.md">\npersonal-rules\n<\/instructions>\n\n<instructions source="AGENTS\.md">\nproject-rules\n<\/instructions>$/);
+    assert.match(withInstructions.stderr, /-- instructions: .*AGENTS\.md, AGENTS\.md/);
+    const without = await runCli(entry, ["--no-instructions", "--dry-run", "hello"], cwd, env);
+    assert.equal(JSON.parse(without.stdout).messages[0].content, "project-system");
+
     const shown = (await runCli(entry, ["--show-config"], cwd, env)).stdout;
     assert.match(shown, /model = "config-model"  \(global ask\.json\)/);
     assert.match(shown, /system = "project-system"  \(project ask\.json\)/);

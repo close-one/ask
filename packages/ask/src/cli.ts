@@ -48,6 +48,7 @@ import {
   type LoadedSettings,
 } from "./config.ts";
 import { legacyEnvNotice } from "./env.ts";
+import { loadInstructions, renderInstructions } from "./instructions.ts";
 import { applyToRc, findExecutable, installInstructions, pickerStatus } from "./install.ts";
 import {
   discoverSkills,
@@ -171,6 +172,7 @@ Options
       --api-key <key>       API key (env OPENAI_API_KEY)
       --config <dir>        add a config directory (env ASK_CONFIG); see Configuration
       --show-config         print each setting and where it came from, then exit
+      --no-instructions     skip AGENTS.md and configured instruction files
   -f, --file <path>         attach a path explicitly; repeatable
       --max-tokens <n>      cap the answer length
       --temperature <n>     sampling temperature (omitted unless set)
@@ -705,6 +707,17 @@ async function main(argv: string[]): Promise<number> {
     if (!bool("quiet") || note.startsWith("not reading")) status.note(`-- ${note}`);
   }
   const settings = loaded.settings;
+  // AGENTS.md and `instructions` files, read once and announced: a project's
+  // files are prompt content the repository chose.
+  const instructions = bool("no-instructions")
+    ? { files: [], notes: [] }
+    : await loadInstructions(loaded.instructions, loaded.projectRoot);
+  if (!bool("quiet")) {
+    for (const note of instructions.notes) status.note(`-- ${note}`);
+    if (instructions.files.length) {
+      status.note(`-- instructions: ${instructions.files.map((file) => terminalField(file.display)).join(", ")}`);
+    }
+  }
   const timeoutMs = settings.timeout === undefined ? DEFAULT_RESPONSE_TIMEOUT_MS : timeoutSecondsToMs(settings.timeout);
 
   const createPath = flag("create");
@@ -983,8 +996,8 @@ async function main(argv: string[]): Promise<number> {
         ? WRITE_SYSTEM
         : DEFAULT_SYSTEM);
 
-  const skillText = renderSkills(skills);
-  const systemWithSkills = skillText.length > 0 ? `${system}\n\n${skillText}` : system;
+  const systemWithSkills = [system, renderInstructions(instructions.files), renderSkills(skills)]
+    .filter((part) => part.length > 0).join("\n\n");
 
   if (bool("show-context")) {
     printContext(context, {

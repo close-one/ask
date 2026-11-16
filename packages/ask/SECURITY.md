@@ -232,6 +232,17 @@ modified or added file needs trusting again. Project layers can still set the
 model, system prompt and similar preferences; like attached files, those are
 content the repository chose, and `--show-config` shows where each came from.
 
+**Instructions are announced and contained.** `AGENTS.md` files and
+`instructions` entries are added to the system prompt, so they change what the
+model is told. Each run names the files it used. An untrusted project may list
+only relative paths inside itself, and its files (including `AGENTS.md`) are
+read only if their real path, after symlinks, stays inside the project: a
+repository cannot pull `~/.ssh/id_rsa` or another project's files into a
+request. Parent directories of the project root are never searched. Credential-
+like names and binary files are skipped, sizes are capped, and a missing file is
+reported rather than replaced by a ranked search match. `--no-instructions`
+skips them all.
+
 **Keys stay with their endpoint.** If a layer changes `endpoint.url` without
 setting `apiKey` (or organisation/project), the lower layer's values are dropped
 rather than sent to the new URL. A `--base-url` flag is explicit and keeps the

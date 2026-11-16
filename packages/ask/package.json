@@ -45,6 +45,10 @@
       "types": "./dist/src/env.d.ts",
       "default": "./dist/src/env.js"
     },
+    "./internal/instructions": {
+      "types": "./dist/src/instructions.d.ts",
+      "default": "./dist/src/instructions.js"
+    },
     "./internal/refs": {
       "types": "./dist/src/refs.d.ts",
       "default": "./dist/src/refs.js"

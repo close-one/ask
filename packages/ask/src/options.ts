@@ -11,6 +11,7 @@ export const OPTIONS = {
   "api-key": { type: "string" },
   config: { type: "string" },
   "show-config": { type: "boolean" },
+  "no-instructions": { type: "boolean" },
   trust: { type: "boolean" },
   untrust: { type: "boolean" },
   file: { type: "string", short: "f", multiple: true },

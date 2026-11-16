@@ -193,3 +193,57 @@ test("--show-config names every source and never prints the key", async (t) => {
   assert.match(text, /endpoint\.apiKey = \(set\)  \(global ask\.json\)/);
   assert.doesNotMatch(text, /sk-secret-value/);
 });
+
+test("AGENTS.md comes from each config directory and the project root, never a parent or subdirectory", async (t) => {
+  const { base, global, custom, env, write } = await sandbox(t);
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const repo = path.join(base, "repo");
+  await mkdir(path.join(repo, ".ask"), { recursive: true });
+  await mkdir(path.join(repo, "sub"), { recursive: true });
+  await promisify(execFile)("git", ["init", "-q", repo]);
+  for (const dir of [global, custom, base, repo, path.join(repo, ".ask"), path.join(repo, "sub")]) {
+    await write(path.join(dir, "AGENTS.md"), `# ${dir}`);
+  }
+  // Run from a subdirectory: the root is the Git work tree, and nothing above or below it counts.
+  const loaded = await loadSettings({ cwd: path.join(repo, "sub"), env, configDir: custom });
+  assert.equal(loaded.projectRoot, await realpath(repo));
+  assert.deepEqual(loaded.instructions.map((entry) => [entry.pattern, entry.source, entry.within !== null]), [
+    [path.join(global, "AGENTS.md"), "global AGENTS.md", false],
+    [path.join(custom, "AGENTS.md"), "custom AGENTS.md", false],
+    [path.join(await realpath(repo), "AGENTS.md"), "project AGENTS.md", true],
+    [path.join(await realpath(repo), ".ask", "AGENTS.md"), "project .ask/AGENTS.md", true],
+  ]);
+  assert.match(describeSettings(loaded), /Instruction files \(in order\):[\s\S]*project AGENTS\.md, kept inside the project/);
+});
+
+test("instructions resolve against their own file's directory, join across layers, and null clears them", async (t) => {
+  const { global, custom, project, env, write } = await sandbox(t);
+  await write(path.join(global, "ask.json"), { instructions: ["rules/*.md", "~/notes/style.md"] });
+  await write(path.join(custom, "ask.jsonc"), '{ "instructions": ["team.md", "rules/*.md"] }');
+  const joined = await loadSettings({ cwd: project, env, configDir: custom });
+  const { homedir } = await import("node:os");
+  const expected = [path.join(global, "rules/*.md"), path.join(homedir(), "notes/style.md"), path.join(custom, "team.md"), path.join(custom, "rules/*.md")];
+  assert.deepEqual(joined.instructions.map((entry) => entry.pattern), expected);
+  assert.deepEqual(joined.settings.instructions, expected);
+
+  env["ASK_CONFIG_CONTENT"] = '{ "instructions": null }';
+  await write(path.join(project, "AGENTS.md"), "project rules");
+  const cleared = await loadSettings({ cwd: project, env, configDir: custom });
+  assert.deepEqual(cleared.instructions.map((entry) => entry.source), ["project AGENTS.md"], "null keeps conventional AGENTS.md files");
+});
+
+test("an untrusted project may only list instruction files inside it; trust lifts that", async (t) => {
+  const { project, env, write } = await sandbox(t);
+  await write(path.join(project, "ask.json"), { instructions: ["docs/rules.md", "/etc/passwd", "~/.ssh/id_rsa", "../outside.md"] });
+  const untrusted = await loadSettings({ cwd: project, env });
+  assert.deepEqual(untrusted.instructions.map((entry) => entry.pattern), [path.join(project, "docs/rules.md")]);
+  assert.equal(untrusted.instructions[0]?.within, project);
+  for (const entry of ["/etc/passwd", "~/.ssh/id_rsa", "../outside.md"]) {
+    assert.ok(untrusted.notes.some((note) => note.includes(`ignored instruction ${entry}`)), entry);
+  }
+  await trustProject(project, env);
+  const trusted = await loadSettings({ cwd: project, env });
+  assert.equal(trusted.instructions.length, 4);
+  assert.ok(trusted.instructions.every((entry) => entry.within === null));
+});

@@ -21,6 +21,10 @@
   // "temperature": 0.2,
   // "maxTokens": 2000,
   "timeout": 120, // seconds
+
+  // Extra instruction files or globs, relative to this file, added to every
+  // request after AGENTS.md (which is read from this directory automatically).
+  // "instructions": ["~/notes/style.md", "rules/*.md"],
 }
 
 // CLI-only settings go in cli.json(c):  { "sessionMaxTokens": 32000, "next": true }

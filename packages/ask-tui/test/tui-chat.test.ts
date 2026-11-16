@@ -507,3 +507,20 @@ test("without a context window, resent history alone is capped at the CLI defaul
     assert.ok(history.reduce((sum, message) => sum + estimateTokens(String(message.content)), 0) <= DEFAULT_SESSION_MAX_TOKENS);
   } finally { await rm(cwd, { recursive: true, force: true }); }
 });
+
+test("instructions follow the configured system prompt and are re-read for every submission", async () => {
+  const cwd = await mkdtemp(path.join(tmpdir(), "ask-tui-instructions-"));
+  try {
+    const { client, requests } = clientWith([{ text: "One" }, { text: "Two" }]);
+    let version = 0;
+    const chat = new TuiChat(client, {
+      cwd, system: "BASE",
+      instructions: async () => `<instructions source="AGENTS.md">\nRULES ${++version}\n</instructions>`,
+    });
+    await chat.submit("first");
+    await chat.submit("second");
+    const systems = requests.map((request) => String(request.messages[0]!.content));
+    assert.match(systems[0]!, /^BASE\n\n<instructions source="AGENTS\.md">\nRULES 1\n<\/instructions>\n\nYou are in a user-driven chat/);
+    assert.match(systems[1]!, /RULES 2/, "edits to AGENTS.md apply without restarting");
+  } finally { await rm(cwd, { recursive: true, force: true }); }
+});

@@ -10,6 +10,10 @@
 //   environment         ASK_MODEL, ASK_TIMEOUT, ... (one setting each)
 //   flags               --model, --timeout, ...
 //
+// Instruction files: each config directory's AGENTS.md, the project root's
+// AGENTS.md (never a parent directory's), and any `instructions` entries,
+// which resolve against the directory of the file that lists them.
+//
 // Each directory may hold ask.json(c) (common settings), cli.json(c) and
 // tui.json(c). Objects merge key by key, scalars are replaced, arrays are
 // concatenated without duplicates, and null removes a lower layer's value.
@@ -45,18 +49,20 @@ export interface Settings {
   readonly maxTokens?: number;
   /** Seconds. */
   readonly timeout?: number;
+  /** Instruction files or globs, resolved to absolute paths. */
+  readonly instructions?: readonly string[];
   readonly endpoint: EndpointSettings;
   readonly cli: { readonly sessionMaxTokens?: number; readonly next?: boolean };
   readonly tui: { readonly theme?: string; readonly contextWindow?: number; readonly mouse?: boolean };
 }
 
-type Kind = "string" | "boolean" | "positiveInteger" | "timeout" | "temperature";
+type Kind = "string" | "stringArray" | "boolean" | "positiveInteger" | "timeout" | "temperature";
 interface Shape { readonly [key: string]: Kind | Shape }
 
 const ENDPOINT: Shape = { url: "string", apiKey: "string", organization: "string", project: "string" };
 const COMMON: Shape = {
   model: "string", system: "string", temperature: "temperature", maxTokens: "positiveInteger",
-  timeout: "timeout", endpoint: ENDPOINT,
+  timeout: "timeout", instructions: "stringArray", endpoint: ENDPOINT,
 };
 const CLI: Shape = { sessionMaxTokens: "positiveInteger", next: "boolean" };
 const TUI: Shape = { theme: "string", contextWindow: "positiveInteger", mouse: "boolean" };
@@ -156,6 +162,9 @@ function checkValue(kind: Kind, value: unknown, where: string): unknown {
   const fail = (expected: string) => { throw new ConfigFileError(`${where} must be ${expected}`); };
   switch (kind) {
     case "string": if (typeof value !== "string") fail("a string"); return value;
+    case "stringArray":
+      if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) fail("an array of strings");
+      return value;
     case "boolean": if (typeof value !== "boolean") fail("true or false"); return value;
     case "positiveInteger":
       if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) fail("a positive integer");
@@ -372,6 +381,18 @@ export interface LayerInfo {
   readonly trusted?: boolean;
 }
 
+/** One instruction file or glob, with where it came from. */
+export interface InstructionEntry {
+  /** Absolute path, or an absolute glob. */
+  readonly pattern: string;
+  /** The layer that listed it (or found AGENTS.md), for notes and --show-config. */
+  readonly source: string;
+  /** Untrusted project entries must stay inside this directory, after symlinks. */
+  readonly within: string | null;
+  /** An AGENTS.md found by convention, rather than listed in `instructions`. */
+  readonly implicit: boolean;
+}
+
 export interface LoadedSettings {
   readonly settings: Settings;
   /** Setting path (e.g. "tui.theme") → the layer that supplied it. */
@@ -380,6 +401,8 @@ export interface LoadedSettings {
   /** Ignored settings, refused files, unknown keys and the like. */
   readonly notes: readonly string[];
   readonly projectRoot: string;
+  /** Instruction files in precedence order (lowest first), not yet read. */
+  readonly instructions: readonly InstructionEntry[];
 }
 
 export interface LoadOptions {
@@ -396,6 +419,7 @@ function settingValue(name: string, raw: string, kind: Kind): unknown {
   const invalid = (expected: string) => new ConfigFileError(`Invalid ${name}: must be ${expected}`);
   switch (kind) {
     case "string": return raw;
+    case "stringArray": return [raw];
     case "boolean": return raw !== "0" && raw.toLowerCase() !== "false";
     case "positiveInteger": {
       const number = Number(raw);
@@ -480,6 +504,44 @@ export async function loadSettings(options: LoadOptions = {}): Promise<LoadedSet
   const env = options.env ?? process.env;
   const cwd = options.cwd ?? process.cwd();
   const notes: string[] = [];
+  const instructions: InstructionEntry[] = [];
+  /** A directory's AGENTS.md, by convention. Missing is fine. */
+  const agents = async (dir: string, source: string, within: string | null) => {
+    const file = path.join(dir, "AGENTS.md");
+    if (await exists(file)) instructions.push({ pattern: file, source, within, implicit: true });
+  };
+  /**
+   * Resolve a layer's `instructions` against its own directory, record them, and
+   * rewrite them as absolute paths so --show-config shows what will be read.
+   * An untrusted project may only name relative paths inside the project.
+   */
+  const listInstructions = (data: Plain, base: string, source: string, within: string | null): Plain => {
+    const listed = data["instructions"];
+    if (listed === null) {
+      // null clears earlier `instructions`; conventional AGENTS.md files stay.
+      for (let i = instructions.length - 1; i >= 0; i--) if (!instructions[i]!.implicit) instructions.splice(i, 1);
+      return data;
+    }
+    if (!Array.isArray(listed)) return data;
+    const resolved: string[] = [];
+    for (const entry of listed as string[]) {
+      if (!entry) continue;
+      const home = entry === "~" || entry.startsWith("~/");
+      if (within && (home || path.isAbsolute(entry))) {
+        notes.push(`${source}: ignored instruction ${terminalField(entry)} (an untrusted project may only name files inside it)`);
+        continue;
+      }
+      const absolute = home ? path.join(homedir(), entry.slice(2)) : path.resolve(base, entry);
+      const relative = within ? path.relative(within, absolute) : "";
+      if (within && (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative))) {
+        notes.push(`${source}: ignored instruction ${terminalField(entry)} (outside the project)`);
+        continue;
+      }
+      if (!instructions.some((item) => item.pattern === absolute)) instructions.push({ pattern: absolute, source, within, implicit: false });
+      resolved.push(absolute);
+    }
+    return { ...data, instructions: resolved };
+  };
   const layers: LayerInfo[] = [];
   const merged: Plain = {};
   const sources = new Map<string, string>();
@@ -496,8 +558,11 @@ export async function loadSettings(options: LoadOptions = {}): Promise<LoadedSet
   }, env) as Plain), []);
 
   const global = globalConfigDir(env);
-  const globalLayers = await readDirectory(global, ["ask", "cli", "tui"], notes);
-  for (const layer of globalLayers) apply(`global ${path.basename(layer.file)}`, substitute(layer.data, env) as Plain, [layer.file]);
+  await agents(global, "global AGENTS.md", null);
+  for (const layer of await readDirectory(global, ["ask", "cli", "tui"], notes)) {
+    const label = `global ${path.basename(layer.file)}`;
+    apply(label, listInstructions(substitute(layer.data, env) as Plain, global, label, null), [layer.file]);
+  }
 
   const custom = options.configDir ?? env["ASK_CONFIG"];
   if (custom) {
@@ -505,31 +570,42 @@ export async function loadSettings(options: LoadOptions = {}): Promise<LoadedSet
     if (!await stat(dir).then((info) => info.isDirectory(), () => false)) {
       throw new ConfigFileError(`${options.configDir ? "--config" : "ASK_CONFIG"} ${terminalField(dir)} is not a directory`);
     }
+    await agents(dir, "custom AGENTS.md", null);
     for (const layer of await readDirectory(dir, ["ask", "cli", "tui"], notes)) {
-      apply(`custom ${path.basename(layer.file)}`, substitute(layer.data, env) as Plain, [layer.file]);
+      const label = `custom ${path.basename(layer.file)}`;
+      apply(label, listInstructions(substitute(layer.data, env) as Plain, dir, label, null), [layer.file]);
     }
   }
 
   const root = await realpath(await projectRoot(cwd)).catch(() => path.resolve(cwd));
   const files = await projectFiles(root);
+  let trusted = false;
   if (files.length) {
-    const store = await readTrust(env);
-    const recorded = store.projects[root];
-    const trusted = recorded !== undefined && recorded.hash === await hashFiles(root, files);
+    const recorded = (await readTrust(env)).projects[root];
+    trusted = recorded !== undefined && recorded.hash === await hashFiles(root, files);
     if (recorded && !trusted) notes.push(`project config in ${terminalField(root)} changed since it was trusted; run ask /trust again to allow its endpoint and {env:} settings`);
-    for (const file of files) {
-      const name = path.basename(file).replace(/\.jsonc?$/, "") as "ask" | "cli" | "tui";
-      const [layer] = await readDirectory(path.dirname(file), [name], notes);
-      if (!layer) continue;
-      const label = `project ${path.relative(root, file)}`;
-      const data = trusted ? substitute(layer.data, env) as Plain : restrict(layer.data, label, notes);
-      apply(label, data, [file], { trusted });
-    }
   }
+  // Project instructions are the repository's content: read them, but keep an
+  // untrusted project's files inside it.
+  const within = trusted ? null : root;
+  await agents(root, "project AGENTS.md", within);
+  let dotAskAgents = false;
+  for (const file of files) {
+    const name = path.basename(file).replace(/\.jsonc?$/, "") as "ask" | "cli" | "tui";
+    const inDotAsk = path.dirname(file) !== root;
+    if (inDotAsk && !dotAskAgents) { dotAskAgents = true; await agents(path.dirname(file), "project .ask/AGENTS.md", within); }
+    const [layer] = await readDirectory(path.dirname(file), [name], notes);
+    if (!layer) continue;
+    const label = `project ${path.relative(root, file)}`;
+    const data = trusted ? substitute(layer.data, env) as Plain : restrict(layer.data, label, notes);
+    apply(label, listInstructions(data, path.dirname(file), label, within), [file], { trusted });
+  }
+  if (!dotAskAgents) await agents(path.join(root, ".ask"), "project .ask/AGENTS.md", within);
 
   const inline = env["ASK_CONFIG_CONTENT"];
   if (inline?.trim()) {
-    apply("ASK_CONFIG_CONTENT", substitute(validate(parseJsonc(inline, "ASK_CONFIG_CONTENT"), ALL, "ASK_CONFIG_CONTENT", notes), env) as Plain, []);
+    const data = substitute(validate(parseJsonc(inline, "ASK_CONFIG_CONTENT"), ALL, "ASK_CONFIG_CONTENT", notes), env) as Plain;
+    apply("ASK_CONFIG_CONTENT", listInstructions(data, cwd, "ASK_CONFIG_CONTENT", null), []);
   }
 
   // One layer per named variable, so --show-config can name each one.
@@ -555,7 +631,7 @@ export async function loadSettings(options: LoadOptions = {}): Promise<LoadedSet
       cli: (merged["cli"] ?? {}) as Settings["cli"],
       tui: (merged["tui"] ?? {}) as Settings["tui"],
     } as Settings,
-    sources, layers, notes, projectRoot: root,
+    sources, layers, notes, projectRoot: root, instructions,
   };
 }
 
@@ -576,6 +652,12 @@ export function describeSettings(loaded: LoadedSettings): string {
     }
   };
   walk(loaded.settings as unknown as Plain, "");
+  if (loaded.instructions.length) {
+    lines.push("", "Instruction files (in order):");
+    for (const entry of loaded.instructions) {
+      lines.push(`  ${terminalField(entry.pattern)}  (${terminalField(entry.source)}${entry.within ? ", kept inside the project" : ""})`);
+    }
+  }
   if (loaded.notes.length) lines.push("", "Notes:", ...loaded.notes.map((note) => `  ${note}`));
   return lines.join("\n");
 }

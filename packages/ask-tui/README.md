@@ -58,7 +58,10 @@ Configuration is shared with `ask`: layered JSON in `~/.config/ask/`, an optiona
 ```
 
 A project cannot choose the endpoint or key until you run `ask /trust`, and
-`.env` files are never read. See the `ask`
+`.env` files are never read. `AGENTS.md` files and `instructions` are added to
+the system prompt as for `ask`; the TUI lists them in the transcript at startup
+and re-reads them for every message, so edits apply without restarting
+(`--no-instructions` skips them). See the `ask`
 [configuration notes](https://github.com/codehausau/ask/tree/main/packages/ask#configuration);
 `ask-tui --show-config` shows every setting and where it came from.
 Run `ask-tui --help` for supported flags.

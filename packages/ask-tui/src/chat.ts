@@ -26,6 +26,9 @@ export interface TuiChatOptions {
   readonly tokenField?: TokenField | undefined;
   readonly limits?: LimitOverrides;
   readonly skillRoots?: readonly string[];
+  /** Rendered instruction files (AGENTS.md and configured `instructions`),
+   * re-read for every submission so edits apply without restarting. */
+  readonly instructions?: (() => Promise<string>) | undefined;
   /** Explicit model capacity; never inferred from a model name or endpoint.
    * When set, resent history is trimmed so the estimated request fits it. */
   readonly contextWindow?: number | undefined;
@@ -246,7 +249,8 @@ export class TuiChat {
       this.files = context.blocks.map((block) => block.path);
       onContextReady?.();
       const prompt = attachmentMessage(text, context);
-      const system = [this.options.system, renderSkills(skills), UPDATE_SYSTEM].filter(Boolean).join("\n\n");
+      const instructions = await this.options.instructions?.() ?? "";
+      const system = [this.options.system, instructions, renderSkills(skills), UPDATE_SYSTEM].filter(Boolean).join("\n\n");
       this.trimHistory(this.historyBudget(estimateTokens(system) + estimateTokens(prompt)));
       const result = await askOnce(this.client, buildRequest({
         prompt,

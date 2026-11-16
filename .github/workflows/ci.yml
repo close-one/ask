@@ -84,8 +84,8 @@ jobs:
         with:
           bun-version: ${{ matrix.bun-version }}
       - run: pnpm install --frozen-lockfile
-      - run: pnpm test:tui
       - run: pnpm build
+      - run: pnpm test:tui
       - run: node dist/src/tui/launcher.js --help
 
   package:
@@ -103,6 +103,9 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - name: Pack
@@ -136,6 +139,8 @@ jobs:
           ask --install-completion > /dev/null
           echo 'const x = 1;' > sample.ts
           ask --no-session --show-context '@sample.ts' </dev/null
+      - name: Exercise installed native TUI in a pseudo-terminal
+        run: python3 test/tui-package-smoke.py
       - name: Verify npm publish metadata without uploading
         env:
           TARBALL: ${{ steps.pack.outputs.tarball }}

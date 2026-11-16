@@ -1,6 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { filterPopupItems, isFileCandidateVisible, SLASH_COMMANDS, type PopupItem } from "../src/tui/picker.ts";
+import { chatRefs, serializeMention } from "../src/tui/mentions.ts";
+
+test("picker mentions round-trip parser delimiters and cannot introduce extra attachments", () => {
+  for (const name of ["src/routes/(group)/page.ts", "notes).ts", "report,", "report;", "report:",
+    "name with spaces.ts", "a'b.ts", 'a"b.ts', "😀/notes).ts", "file @other.ts", "a\\b.ts"]) {
+    const mention = serializeMention(name);
+    assert.notEqual(mention, null, name);
+    assert.deepEqual(chatRefs(`Explain ${mention} please`), [name]);
+  }
+  for (const name of ["", "line\nbreak", "line\rbreak", `both ' and " quotes`]) assert.equal(serializeMention(name), null);
+});
 
 const commands: PopupItem[] = SLASH_COMMANDS.map((entry) => ({ kind: "command", value: entry.value, label: entry.value, description: entry.description }));
 

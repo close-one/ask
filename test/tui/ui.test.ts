@@ -1376,6 +1376,99 @@ test("OpenTUI composer completes mentions, submits once, reviews and applies loc
   }
 });
 
+test("approval diffs expose terminal-control payloads that will be written", async () => {
+  const cwd = await mkdtemp(path.join(tmpdir(), "ask-tui-review-controls-"));
+  const setup = await createTestRenderer({ width: 180, height: 50, kittyKeyboard: true });
+  try {
+    const original = "const safe = true;\n";
+    const proposed = "const safe = true; /*\x1b]0;*/globalThis.hiddenEffect = true;/*\x07*/\n";
+    await writeFile(path.join(cwd, "example.js"), original);
+    const client: ChatClient = { chat: { completions: { async create() {
+      return { id: "test", object: "chat.completion", created: 0, model: "test", choices: [
+        { index: 0, finish_reason: "stop", logprobs: null, message: { role: "assistant", refusal: null,
+          content: `<update path="example.js">\n<<<<<<< SEARCH\n${original.trimEnd()}\n=======\n${proposed.trimEnd()}\n>>>>>>> REPLACE\n</update>` } },
+      ] };
+    } } } };
+    const chat = new TuiChat(client, { cwd });
+    const ui = mountChatUI(setup.renderer, chat, "test");
+    ui.input.setText("Improve @example.js"); ui.input.gotoBufferEnd(); setup.mockInput.pressEnter();
+    await waitUntilIdle(ui); await setup.flush();
+    const frame = setup.captureCharFrame();
+    assert.match(frame, /globalThis\.hiddenEffect = true/);
+    assert.match(frame, /\\u001b\]0;/);
+    assert.match(frame, /\\u0007/);
+    assert.equal(await readFile(path.join(cwd, "example.js"), "utf8"), original);
+    ui.input.setText("/apply"); ui.input.gotoBufferEnd(); setup.mockInput.pressEnter();
+    await waitUntilIdle(ui);
+    assert.equal(await readFile(path.join(cwd, "example.js"), "utf8"), proposed);
+  } finally { await setup.dispose(); await rm(cwd, { recursive: true, force: true }); }
+});
+
+test("new destroys the visible transcript, clears selection/history and preserves the chosen theme", async () => {
+  const cwd = await mkdtemp(path.join(tmpdir(), "ask-tui-reset-transcript-"));
+  const setup = await createTestRenderer({ width: 100, height: 40, kittyKeyboard: true });
+  try {
+    const requests: OneShotRequest[] = [];
+    const client: ChatClient = { chat: { completions: { async create(request) {
+      requests.push(request);
+      return { id: "test", object: "chat.completion", created: 0, model: "test", choices: [
+        { index: 0, finish_reason: "stop", logprobs: null, message: { role: "assistant", refusal: null,
+          content: "**PRIVATE_ANSWER**\n\n```ts\nconst privateValue = 1;\n```" } },
+      ] };
+    } } } };
+    const chat = new TuiChat(client, { cwd });
+    const ui = mountChatUI(setup.renderer, chat, "test", { theme: "dracula" });
+    const command = async (text: string) => {
+      ui.input.setText(text); ui.input.gotoBufferEnd(); setup.mockInput.pressEnter();
+      await waitUntilIdle(ui); await setup.flush();
+    };
+    for (let turn = 0; turn < 3; turn++) {
+      await command("PRIVATE_QUESTION");
+      assert.match(setup.captureCharFrame(), /PRIVATE_ANSWER/);
+      const old = [...ui.transcript.getChildren()];
+      await command("/new");
+      assert.ok(old.every((node) => node.isDestroyed));
+      assert.equal(ui.transcript.getChildren().length, 1);
+      assert.doesNotMatch(setup.captureCharFrame(), /PRIVATE_|privateValue/);
+      assert.equal(setup.renderer.hasSelection, false);
+      assert.equal(chat.lastAnswer, null);
+      assert.equal(chat.sessionStats.turns, 0);
+      assert.equal(ui.theme.name, "dracula");
+      setup.resize(100 + turn, 40); await setup.flush();
+    }
+    assert.ok(requests.every((request) => request.messages.length === 2), "old turns are not sent after reset");
+  } finally { await setup.dispose(); await rm(cwd, { recursive: true, force: true }); }
+});
+
+test("selecting punctuation-bearing filenames attaches the selected path, not a parsed prefix", async () => {
+  const cwd = await mkdtemp(path.join(tmpdir(), "ask-tui-mention-roundtrip-"));
+  const setup = await createTestRenderer({ width: 100, height: 40, kittyKeyboard: true });
+  try {
+    await writeFile(path.join(cwd, "notes"), "DECOY");
+    const requests: OneShotRequest[] = [];
+    const client: ChatClient = { chat: { completions: { async create(request) {
+      requests.push(request);
+      return { id: "test", object: "chat.completion", created: 0, model: "test", choices: [
+        { index: 0, finish_reason: "stop", logprobs: null, message: { role: "assistant", refusal: null, content: "Answer" } },
+      ] };
+    } } } };
+    const chat = new TuiChat(client, { cwd });
+    const ui = mountChatUI(setup.renderer, chat, "test");
+    for (const name of ["src/routes/(group)/page.ts", "notes).ts", "notes,", "notes;", "notes:"]) {
+      await mkdir(path.dirname(path.join(cwd, name)), { recursive: true });
+      await writeFile(path.join(cwd, name), "SELECTED_CONTENT");
+      ui.setCandidates([name]);
+      ui.input.setText("Explain @"); ui.input.gotoBufferEnd(); await setup.flush();
+      setup.mockInput.pressTab(); setup.mockInput.pressEnter();
+      await waitUntilIdle(ui);
+      assert.deepEqual(chat.attachmentPaths, [name]);
+      assert.match(String(requests.at(-1)!.messages.at(-1)!.content), /SELECTED_CONTENT/);
+      assert.doesNotMatch(String(requests.at(-1)!.messages.at(-1)!.content), /DECOY/);
+      ui.input.setText("/new"); ui.input.gotoBufferEnd(); setup.mockInput.pressEnter(); await waitUntilIdle(ui);
+    }
+  } finally { await setup.dispose(); await rm(cwd, { recursive: true, force: true }); }
+});
+
 test("mention completion respects Unicode and text after the cursor; Shift+Enter never submits", async () => {
   const cwd = await mkdtemp(path.join(tmpdir(), "ask-tui-ui-"));
   const setup = await createTestRenderer({ width: 80, height: 30, kittyKeyboard: true });

@@ -13,8 +13,8 @@
 // cannot run them, and a large skill directory would silently eat the context
 // budget. Files a skill refers to are attached with `@` like anything else.
 
-import type { Dirent } from "node:fs";
-import { readdir, readFile } from "node:fs/promises";
+import { constants, type Dirent } from "node:fs";
+import { open, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 
@@ -155,24 +155,48 @@ const NOT_A_SKILL: ReadonlySet<string> = new Set([
   "index.md",
 ]);
 
-async function readSkill(file: string, root: string, fallbackName: string): Promise<SkillSummary | null> {
-  // Read once rather than stat-then-read: the file could change in between, and
-  // the size then would not describe the text that was parsed. A directory or an
-  // unreadable path throws here, which means "not a skill".
-  let contents: string;
+/** The extra byte detects overflow even if a file grows after fstat. Discovery
+ * uses the same bound as loading; an oversized skill can still be named/listed.
+ */
+async function readSkillFile(file: string): Promise<{ text: string; bytes: number }> {
+  const handle = await open(file, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
   try {
-    contents = await readFile(file, "utf8");
+    const info = await handle.stat();
+    if (!info.isFile()) throw new Error("Skill must be a regular file.");
+    const buffer = Buffer.alloc(MAX_SKILL_BYTES + 1);
+    let length = 0;
+    while (length < buffer.length) {
+      const { bytesRead } = await handle.read(buffer, length, buffer.length - length, length);
+      if (!bytesRead) break;
+      length += bytesRead;
+    }
+    const text = buffer.subarray(0, Math.min(length, MAX_SKILL_BYTES)).toString("utf8");
+    return {
+      text,
+      // Invalid UTF-8 can expand into replacement characters on decoding. Keep
+      // the existing limit on the actual text sent, as well as bounding reads.
+      bytes: length > MAX_SKILL_BYTES ? Math.max(length, info.size) : Buffer.byteLength(text, "utf8"),
+    };
+  } finally {
+    await handle.close();
+  }
+}
+
+async function readSkill(file: string, root: string, fallbackName: string): Promise<SkillSummary | null> {
+  let contents: { text: string; bytes: number };
+  try {
+    contents = await readSkillFile(file);
   } catch {
     return null;
   }
 
-  const front = parseFrontMatter(contents);
+  const front = parseFrontMatter(contents.text);
   return {
     name: front.name ?? fallbackName,
     description: front.description,
     file,
     root,
-    bytes: Buffer.byteLength(contents, "utf8"),
+    bytes: contents.bytes,
   };
 }
 
@@ -309,8 +333,7 @@ export async function loadSkill(
   skill: SkillSummary,
   matched: "name" | "search",
 ): Promise<LoadedSkill> {
-  const text = await readFile(skill.file, "utf8");
-  const bytes = Buffer.byteLength(text, "utf8");
+  const { text, bytes } = await readSkillFile(skill.file);
   if (bytes > MAX_SKILL_BYTES) {
     throw new SkillResolutionError(
       `${skill.name} is ${Math.round(bytes / 1024)} KB, over the ${Math.round(

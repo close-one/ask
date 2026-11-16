@@ -39,13 +39,15 @@ These preview flags belong to the existing CLI; the TUI manages references with 
 The TUI requires **Bun 1.3.14+**. The existing `ask` CLI still runs on Node 20+;
 it never imports OpenTUI. Package managers may warn about OpenTUI's newer engine
 requirements when installing under older Node versions.
-The `ask-tui` launcher starts Bun with `--no-env-file` so that only Ask's
-restricted `.env` loader runs. If invoking the Bun entry point directly, use
-`bun --no-env-file src/tui/index.ts`; invocations without that flag are refused.
+The Node `ask-tui` launcher starts Bun with `--no-env-file` and an explicit,
+bundled runtime configuration. Repository `bunfig.toml` preload hooks are never
+loaded, automatic global runtime configuration is skipped, and dependency auto-installation
+is disabled. Use `ask-tui` or `pnpm tui` so these protections take effect before
+any Bun code runs; only Ask's restricted `.env` loader runs.
 
 ```bash
 pnpm install
-pnpm tui                        # source checkout; needs bun on PATH
+pnpm tui                        # builds and launches; needs bun on PATH
 # Or, after building/installing the package:
 ask-tui                         # Bun must be on PATH
 ask-tui --model gpt-4o-mini
@@ -61,7 +63,7 @@ Type `@` anywhere at a word boundary in your message to open a file/folder
 popup immediately above the composer. Keep typing to filter and use Up/Down to
 move. **Enter** selects the highlighted entry without sending; **Tab** also
 selects. Escape closes the popup; typing `@` again reopens it without inserting
-a duplicate sigil. Deleting and retyping a mention also reopens it. Paths with spaces are quoted automatically;
+a duplicate sigil. Deleting and retyping a mention also reopens it. Paths with spaces or parser-significant punctuation are quoted automatically;
 you can also type `@"path with spaces.ts"` yourself. When no candidate popup is
 active, **Enter** sends. **Shift+Enter** always adds a newline. PageUp/PageDown
 and the mouse wheel scroll the transcript.
@@ -322,6 +324,8 @@ Safety rules:
   Multiple edits match the original file and must not overlap.
 - Malformed blocks, incomplete responses, or any invalid edit invalidate the
   entire proposal. Examples inside Markdown code fences are not actionable.
+- Approval diffs show control characters as visible escapes, including the
+  contents of terminal escape sequences. The bytes written remain unchanged.
 - Identity, contents and parent-directory checks run before writing. Changed
   files require a fresh request; stale proposals are never rebased automatically.
 - Existing guarded atomic replacement preserves ordinary permissions. Unlike
@@ -334,7 +338,9 @@ Safety rules:
 This initial TUI supports updates to existing files only. Use `ask /create` for
 new files. It has **in-memory history only** (separate from CLI sessions), no
 automatic compaction/pruning, no streaming, no model tools, and no automatic
-retries. Use `/new` to clear history, attachments, skills and pending edits. `/context`
+retries. Use `/new` to clear history, attachments, skills and pending edits, and
+destroy the visible transcript and its native renderables. Theme and sidebar
+width remain selected for the current run. `/context`
 opens the context manager; `/help` lists commands; `/quit` or Ctrl+D exits.
 Ctrl+C exits only when no text is selected; otherwise it copies the selection.
 Long conversations resend their history and can exceed the provider's window.
@@ -377,8 +383,14 @@ history, attachments and proposals, including skills selected with `--skill`.
 Removing a skill does not remove earlier answers influenced by it from history;
 use `/new` for a clean conversation. No additional libraries are required.
 
-Run the native UI tests with `pnpm test:tui` under Bun. Controller/protocol tests
-also run in the normal Node test suite without importing OpenTUI.
+Run `pnpm build` followed by `pnpm test:tui` under Bun. This includes the real
+Node launcher's isolation from repository/global Bun preloads. Controller/protocol
+tests also run in the normal Node test suite without importing OpenTUI.
+After installing the tarball, `python3 test/tui-package-smoke.py` exercises its
+native renderer, a local mock completion, diff approval and clean exit in a PTY.
+
+The UI coordinator is `src/tui/ui.ts`; layout, completion, clipboard, transcript
+rendering and local command dispatch live in separate modules in that directory.
 
 ## Install
 
@@ -1026,7 +1038,7 @@ alongside your files. `--skill` is repeatable and composes in the order given.
 | Selection | exact name, else a ranked search over names and descriptions; a tie lists the candidates instead of guessing, and any search match is reported before the request |
 | What is read | **`SKILL.md` only.** Bundled `assets/` and scripts are ignored — a one-shot CLI cannot run them, and a large skill directory would silently eat the context budget. Attach files a skill refers to with `@` |
 | Front matter | stripped; it is metadata, not instructions |
-| Size limit | 128 KB per skill, refused above that |
+| Size limit | 128 KB per skill; discovery and loading read at most the limit plus one overflow-detection byte, even if a file grows during reading |
 | Sessions | skills carry across a thread like `@refs`, re-read from disk each turn |
 | Cost | shown on its own line by `--show-context`, and named in the footer |
 
@@ -1335,7 +1347,7 @@ npm deps and those SHA pins current.
 
 | Workflow | Trigger | What it does |
 | --- | --- | --- |
-| [`ci.yml`](.github/workflows/ci.yml) | push, PR | `tsc --noEmit`; shellcheck on the completion script; tests on Node 20/22/24; native OpenTUI tests on Bun 1.3.14/1.4.4; offline CLI previews; packs and installs the tarball, verifies its version/completions, and runs an npm publish dry-run |
+| [`ci.yml`](.github/workflows/ci.yml) | push, PR | `tsc --noEmit`; shellcheck on the completion script; tests on Node 20/22/24; native OpenTUI tests on Bun 1.3.14/1.4.4; offline CLI previews; packs and installs the tarball, verifies its version/completions, exercises the installed TUI in a PTY with a local mock provider, and runs an npm publish dry-run |
 | [`security.yml`](.github/workflows/security.yml) | push, PR, weekly | `pnpm audit` (runtime blocking, dev advisory); dependency review on PRs; Trivy vulns + secrets + misconfig; TruffleHog over full git history; actionlint + zizmor on these workflows; CycloneDX SBOM artifact |
 | [`codeql.yml`](.github/workflows/codeql.yml) | push, PR, weekly | CodeQL `security-extended` for javascript-typescript |
 | [`scorecard.yml`](.github/workflows/scorecard.yml) | weekly, branch protection changes | OpenSSF Scorecard (public repos only; guarded by a visibility check) |

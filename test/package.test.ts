@@ -56,7 +56,7 @@ test("the npm tarball contains the runnable CLI and completions, without source/
   for (const required of [
     "package.json", "README.md", "SECURITY.md", "LICENSE", "THIRD_PARTY_NOTICES.md", "completions/ask.bash",
     "dist/src/cli.js", "dist/src/safe-write.js", "dist/src/terminal.js",
-    "dist/src/tui/launcher.js", "dist/src/tui/index.js", "dist/src/tui/ui.js",
+    "dist/src/tui/launcher.js", "dist/src/tui/index.js", "dist/src/tui/ui.js", "dist/src/tui/bunfig.toml",
     "dist/src/tui/chat.js", "dist/src/tui/picker.js", "dist/src/tui/updates.js",
     "dist/src/tui/themes.js", "dist/src/tui/theme.js", "dist/src/tui/themes/default.js", "dist/src/tui/themes/dracula.js", "dist/src/tui/themes/high-contrast-light.js",
   ]) assert.ok(files.has(required), `missing packaged file: ${required}`);

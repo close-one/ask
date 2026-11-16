@@ -6,6 +6,8 @@ import { applyUpdates, captureEditableFiles, parseUpdates, prepareUpdates, UPDAT
 import { discoverSkills, filterSkills, loadSkill, renderSkills, resolveSkill, skillSearchPaths, type LoadedSkill, type SkillSummary } from "../skills.ts";
 import { terminalField } from "../terminal.ts";
 import { resolveRef } from "../refs.ts";
+import { chatRefs } from "./mentions.ts";
+export { chatRefs } from "./mentions.ts";
 
 function containsPath(parent: string, file: string): boolean {
   const relative = path.relative(parent, file);
@@ -24,12 +26,6 @@ export interface TuiChatOptions {
   readonly skillRoots?: readonly string[];
   /** Explicit model capacity; never inferred from a model name or endpoint. */
   readonly contextWindow?: number | undefined;
-}
-
-/** Preserve the actual question and its formatting; mentions may occur anywhere. */
-export function chatRefs(text: string): string[] {
-  return [...text.matchAll(/(?:^|[\s(])@(?:"([^"\n]+)"|'([^'\n]+)'|([^\s)]+))/g)]
-    .map((match) => match[1] ?? match[2] ?? match[3]!.replace(/[,;:]$/, ""));
 }
 
 function attachmentMessage(text: string, context: ContextResult): string {
@@ -59,6 +55,8 @@ export interface TuiSessionStats {
 }
 
 export class TuiChat {
+  private readonly client: ChatClient;
+  private readonly options: TuiChatOptions;
   private readonly history: HistoryMessage[] = [];
   private attachments: string[] = [];
   private pending: ProposedUpdate[] = [];
@@ -75,7 +73,9 @@ export class TuiChat {
   private files: string[] = [];
   private excludedFiles = new Set<string>();
 
-  constructor(private readonly client: ChatClient, private readonly options: TuiChatOptions) {
+  constructor(client: ChatClient, options: TuiChatOptions) {
+    this.client = client;
+    this.options = options;
     if (options.contextWindow !== undefined && (!Number.isSafeInteger(options.contextWindow) || options.contextWindow <= 0)) {
       throw new Error("Context window must be a positive safe integer.");
     }

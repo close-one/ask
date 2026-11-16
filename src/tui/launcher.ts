@@ -1,11 +1,14 @@
 #!/usr/bin/env node
-// A fixed runtime launch, not a model tool. Bun must not preload repository .env
-// files before the application's restricted/provenance-aware loader sees them.
+// A fixed runtime launch, not a model tool. Neither repository runtime hooks nor
+// automatic .env loading may run before the application's own checks.
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { terminalField } from "../terminal.ts";
 
-const child = spawn("bun", ["--no-env-file", fileURLToPath(new URL("./index.js", import.meta.url)), ...process.argv.slice(2)], {
+const child = spawn("bun", [
+  "--no-env-file", `--config=${fileURLToPath(new URL("./bunfig.toml", import.meta.url))}`,
+  fileURLToPath(new URL("./index.js", import.meta.url)), ...process.argv.slice(2),
+], {
   stdio: "inherit",
   shell: false,
 });

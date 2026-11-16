@@ -57,7 +57,10 @@ SEARCH/REPLACE grammar; examples in Markdown fences are ignored. Each nonempty
 SEARCH must occur exactly once in the original file, and edits cannot overlap.
 Any invalid block or non-`stop` completion disables the whole proposal.
 
-The TUI shows proposed diffs before enabling `/apply`. Approval applies the whole
+The TUI shows proposed diffs before enabling `/apply`. These diffs visibly escape
+control characters rather than stripping terminal escape sequences and their
+payloads: code that will be written cannot be concealed inside an OSC/DCS string.
+Approval applies the whole
 pending batch and **may replace dirty or untracked files without a Git undo copy**;
 unlike CLI `/write`, explicit review is the authorization. All snapshots are
 preflighted first, then each file uses `src/safe-write.ts` for stale-target checks
@@ -71,10 +74,19 @@ only by the Bun TUI entry point, never by the existing Node CLI. Code blocks are
 rendered without Tree-sitter, so displaying an answer does not download parsers.
 Network endpoint provenance and remote-HTTP protections match the CLI; exiting
 the TUI cancels an in-flight completion request.
-The fixed Node launcher spawns Bun with `--no-env-file`. Direct Bun invocations
-must also disable autoloading (and cannot pass `--env-file`), or the entry point
-refuses to start. This prevents Bun from preloading repository `.env*` values
-and making them look like trusted exports before Ask can enforce its allowlist.
+The fixed Node launcher spawns Bun with `--no-env-file` and an absolute
+`--config=<bundled bunfig.toml>` path. This skips automatic repository/global
+runtime configuration and disables runtime dependency
+auto-installation. Repository `.env*` values cannot masquerade as trusted exports
+before Ask enforces its allowlist. Use `ask-tui` or `pnpm tui`: checks inside a Bun
+entry point alone cannot prevent a hook from executing before that entry point.
+Direct development invocations require both `--no-env-file` and
+`--config=<absolute path to src/tui/bunfig.toml>`; never supply additional preloads
+or `--env-file`.
+
+`/new` clears model history and destroys the visible transcript's native
+renderables, including previous answers and diff panels. It clears selection
+while retaining the user's theme and layout preferences.
 
 ## Shell completion and hints
 
@@ -198,8 +210,11 @@ prompt. Two things follow from that:
   chosen by the CLI, never by the model — a model that could load a skill on
   demand would be making a tool call.
 
-Skills are capped at 128 KB each, and the selection is reported on stderr so an
-inexact match cannot silently change the instructions.
+Skills are capped at 128 KB each. Discovery and loading read regular files through
+a bounded buffer, at most 128 KB plus one overflow-detection byte; growing files
+cannot defeat the bound. Oversized files can be listed by their bounded metadata
+prefix but cannot be submitted. The CLI reports selection on stderr so an inexact
+match cannot silently change the instructions.
 
 The TUI uses the same discovery and loader. `--skill` and `/skill <name>` are
 explicit user selections; `/skills` only lists/searches locally, without a model

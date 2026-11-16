@@ -1,11 +1,42 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
+
+const configFlags = [`--config=${fileURLToPath(new URL("../../src/tui/bunfig.toml", import.meta.url))}`];
+const run = promisify(execFile);
+
+test("Node launcher ignores repository and global Bun preload hooks, even for help", async () => {
+  const cwd = await mkdtemp(path.join(tmpdir(), "ask-tui-preload-"));
+  try {
+    const marker = path.join(cwd, "executed");
+    const hook = path.join(cwd, "hook.ts");
+    await writeFile(hook, `await Bun.write(${JSON.stringify(marker)}, "preload executed");`);
+    const config = `preload = [${JSON.stringify(hook)}]\n`;
+    const home = path.join(cwd, "home");
+    await mkdir(home);
+    await writeFile(path.join(home, ".bunfig.toml"), config);
+    await writeFile(path.join(home, "bunfig.toml"), config);
+    await writeFile(path.join(cwd, "bunfig.toml"), config);
+    const env = { ...process.env, HOME: home, XDG_CONFIG_HOME: home,
+      PATH: `${path.dirname(process.execPath)}${path.delimiter}${process.env["PATH"] ?? ""}` };
+    // Positive control: the fixture really would execute without launcher isolation.
+    await run(process.execPath, ["--no-env-file", "-e", "0"], { cwd, env });
+    await access(marker);
+    await rm(marker);
+    const launcher = fileURLToPath(new URL("../../dist/src/tui/launcher.js", import.meta.url));
+    for (const args of [["--help"], ["--list-skills"]]) {
+      const result = await run("node", [launcher, ...args], { cwd, env, timeout: 10_000 });
+      assert.match(result.stdout, args[0] === "--help" ? /ask-tui/ : /Search paths:/);
+      await assert.rejects(access(marker), { code: "ENOENT" });
+    }
+  } finally { await rm(cwd, { recursive: true, force: true }); }
+});
 
 test("startup theme uses flag over exported default and ignores automatic .env theme settings", async () => {
   const cwd = await mkdtemp(path.join(tmpdir(), "ask-tui-startup-theme-"));
@@ -34,7 +65,7 @@ test("startup theme uses flag over exported default and ignores automatic .env t
         await import(${JSON.stringify(entry)});
       `;
       const stderr = await new Promise<string>((resolve, reject) => {
-        execFile(process.execPath, ["--no-env-file", "-e", bootstrap], {
+        execFile(process.execPath, ["--no-env-file", ...configFlags, "-e", bootstrap], {
           cwd, env: { ...env, ...(value === undefined ? {} : { ASK_THEME: value }) }, timeout: 10_000,
         }, (error, _stdout, stderr) => {
           if (!error || error.code !== 1) { reject(error ?? new Error("expected startup to stop before UI")); return; }
@@ -70,7 +101,7 @@ test("context capacity accepts an exported default, validates it and prefers the
         await import(${JSON.stringify(entry)});
       `;
       const stderr = await new Promise<string>((resolve, reject) => {
-        execFile(process.execPath, ["--no-env-file", "-e", bootstrap], {
+        execFile(process.execPath, ["--no-env-file", ...configFlags, "-e", bootstrap], {
           cwd, env: { ...env, ASK_CONTEXT_WINDOW: value }, timeout: 10_000,
         }, (error, _stdout, stderr) => {
           if (!error || error.code !== 1) { reject(error ?? new Error("expected startup to stop before UI")); return; }
@@ -90,7 +121,7 @@ test("TUI can list skills offline without an API key or terminal", async () => {
     delete env["OPENAI_API_KEY"];
     const entry = new URL("../../src/tui/index.ts", import.meta.url);
     const result = await new Promise<string>((resolve, reject) => {
-      execFile(process.execPath, ["--no-env-file", fileURLToPath(entry), "--list-skills"], { cwd, env, timeout: 10_000 }, (error, stdout) => {
+      execFile(process.execPath, ["--no-env-file", ...configFlags, fileURLToPath(entry), "--list-skills"], { cwd, env, timeout: 10_000 }, (error, stdout) => {
         if (error) reject(error); else resolve(stdout);
       });
     });
@@ -121,7 +152,7 @@ test("real Bun entry refuses autoload and repository-selected endpoints before a
     `;
     for (const flags of [["--no-env-file"], []]) {
       const result = await new Promise<{ code: number; stderr: string }>((resolve, reject) => {
-        execFile(process.execPath, [...flags, "-e", bootstrap], { cwd, env, timeout: 10_000 }, (error, _stdout, stderr) => {
+        execFile(process.execPath, [...flags, ...configFlags, "-e", bootstrap], { cwd, env, timeout: 10_000 }, (error, _stdout, stderr) => {
           if (error && typeof error.code !== "number") { reject(error); return; }
           resolve({ code: error ? Number(error.code) : 0, stderr });
         });

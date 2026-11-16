@@ -20,6 +20,7 @@
     "noUnusedParameters": true,
     "verbatimModuleSyntax": true,
     "isolatedModules": true,
+    "erasableSyntaxOnly": true,
 
     // Relative imports are written as ".ts" so `node src/cli.ts` runs without a
     // build; tsc rewrites them to ".js" in dist.

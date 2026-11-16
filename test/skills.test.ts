@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, truncate, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -189,6 +189,29 @@ test("an oversized skill is refused rather than blowing the context", async () =
   const root = await skillDir({ huge: `---\nname: huge\n---\n${"x".repeat(MAX_SKILL_BYTES + 10)}` });
   const [found] = await discoverSkills([root]);
   await assert.rejects(() => loadSkill(found!, "name"), /over the \d+ KB skill limit/);
+});
+
+test("skill reads enforce byte boundaries and recheck changed files regardless of discovery size", async () => {
+  const root = await skillDir({ bounded: "é".repeat(MAX_SKILL_BYTES / 2) });
+  try {
+    const file = path.join(root, "bounded", "SKILL.md");
+    const [found] = await discoverSkills([root]);
+    assert.equal((await loadSkill(found!, "name")).bytes, MAX_SKILL_BYTES);
+    await writeFile(file, "é".repeat(MAX_SKILL_BYTES / 2) + "x");
+    await assert.rejects(loadSkill(found!, "name"), /skill limit/);
+    await writeFile(file, Buffer.alloc(MAX_SKILL_BYTES, 0xff));
+    await assert.rejects(loadSkill(found!, "name"), /skill limit/, "decoded text must fit the limit too");
+    await writeFile(file, "---\nname: large-file\n---\nSmall prefix");
+    // A sparse oversized file checks that discovery can read its name without
+    // decoding its entire body, while selection still refuses the file.
+    await truncate(file, 1024 * 1024 * 1024);
+    const [large] = await discoverSkills([root]);
+    assert.equal(large?.name, "large-file");
+    assert.equal(large?.bytes, 1024 * 1024 * 1024);
+    await assert.rejects(loadSkill(large!, "name"), /skill limit/);
+    await writeFile(file, "small again");
+    assert.equal((await loadSkill(large!, "name")).body, "small again", "cached sizes must not reject a now-valid skill");
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test("rendering wraps each skill and nothing when there are none", async () => {

@@ -1,4 +1,4 @@
-// Run through ask-tui or `bun --no-env-file src/tui/index.ts`, never Bun's env loader.
+// Use the Node launcher so repository Bun hooks cannot execute before this entry.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -44,7 +44,11 @@ async function main() {
   if (values.help) { process.stdout.write(HELP); return; }
   if (!("Bun" in globalThis)) throw new Error("ask-tui requires Bun 1.3.14+; the existing ask CLI still runs on Node.");
   if (!process.execArgv.includes("--no-env-file") || process.execArgv.some((arg) => /^--env-file(?:=|$)/.test(arg))) {
-    throw new Error("Bun's .env autoload must be disabled. Use ask-tui, pnpm tui, or bun --no-env-file src/tui/index.ts; do not pass --env-file.");
+    throw new Error("Bun's .env autoload must be disabled. Use ask-tui or pnpm tui; do not pass --env-file.");
+  }
+  const config = fileURLToPath(new URL("./bunfig.toml", import.meta.url));
+  if (!process.execArgv.includes(`--config=${config}`)) {
+    throw new Error("Use ask-tui or pnpm tui to launch with Ask's trusted Bun configuration.");
   }
   const cwd = process.cwd();
   if (values["list-skills"]) {

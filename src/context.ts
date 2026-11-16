@@ -75,6 +75,8 @@ export interface CollectOptions {
   /** Attach every search match instead of erroring on ties. */
   readonly allMatches?: boolean;
   readonly limits?: LimitOverrides;
+  /** User-excluded files; applied before reading and context budgets. */
+  readonly excludePaths?: readonly string[];
 }
 
 export interface ExtractedPrompt {
@@ -150,6 +152,7 @@ interface WalkState {
   readonly includeSecrets: boolean;
   readonly found: CheckedPath[];
   readonly skipped: SkippedEntry[];
+  readonly excluded: ReadonlySet<string>;
 }
 
 function skip(absolute: string, state: WalkState, reason: SkipReason): void {
@@ -257,11 +260,12 @@ async function walk(dir: CheckedPath, state: WalkState): Promise<void> {
   entries.sort((a, b) => a.name.localeCompare(b.name));
 
   for (const entry of entries) {
+    const absolute = path.join(dir.absolute, entry.name);
+    if (state.excluded.has(absolute)) continue;
     if (state.found.length >= state.limits.maxFiles) {
       skip(dir.absolute, state, "max-files");
       return;
     }
-    const absolute = path.join(dir.absolute, entry.name);
     const relative = path.relative(state.cwd, absolute);
 
     if (entry.isDirectory()) {
@@ -306,7 +310,8 @@ export async function collectContext(
   const skipped: SkippedEntry[] = [];
   const resolutions: Resolution[] = [];
   const directories: string[] = [];
-  const state: WalkState = { cwd, realCwd, limits, includeSecrets, found: candidates, skipped };
+  const excluded = new Set((options.excludePaths ?? []).map((file) => path.resolve(cwd, file)));
+  const state: WalkState = { cwd, realCwd, limits, includeSecrets, found: candidates, skipped, excluded };
 
   for (const ref of refs) {
     const resolution = await resolveRef(ref, {
@@ -317,6 +322,7 @@ export async function collectContext(
     resolutions.push(resolution);
 
     for (const absolute of resolution.paths) {
+      if (excluded.has(absolute)) continue;
       const checked = await checkPath(absolute, state);
       if (checked === null) continue;
       const { info } = checked;

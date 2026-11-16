@@ -57,6 +57,7 @@ import {
   type LoadedSkill,
 } from "./skills.ts";
 import { startSpinner } from "./spinner.ts";
+import { responseTimeoutMs } from "./timeout.ts";
 import {
   checkCreateRequest,
   checkCreateResponse,
@@ -165,6 +166,7 @@ Options
   -f, --file <path>         attach a path explicitly; repeatable
       --max-tokens <n>      cap the answer length
       --temperature <n>     sampling temperature (omitted unless set)
+      --timeout <seconds>   request timeout (env ASK_TIMEOUT; default 120)
       --token-field <name>  max_tokens | max_completion_tokens (auto by default)
       --max-file-bytes <n>  per-file cap before truncation (default 262144)
       --max-total-bytes <n> total context cap (default 1048576)
@@ -812,6 +814,7 @@ async function main(argv: string[]): Promise<number> {
     const compactClient = createClient({
       apiKey: flag("api-key") ?? process.env["OPENAI_API_KEY"],
       baseURL: compactBaseURL,
+      timeoutMs: responseTimeoutMs(flag("timeout")),
     });
     const compactSpinner = startSpinner({
       label: `compacting ${existing.turns.length} turn(s)`,
@@ -1041,7 +1044,7 @@ async function main(argv: string[]): Promise<number> {
     );
   }
 
-  const client = createClient({ apiKey, baseURL });
+  const client = createClient({ apiKey, baseURL, timeoutMs: responseTimeoutMs(flag("timeout")) });
 
   // A local model can take a while; show progress, but only for a human at a
   // terminal, and always erase the line afterwards.

@@ -238,6 +238,17 @@ async function listTree(
   return walkListing(root, includeSecrets, maxEntries);
 }
 
+/** Read-only picker index; shares search's filters and traversal cap. */
+export async function mentionCandidates(cwd: string): Promise<{
+  paths: string[]; truncated: boolean;
+}> {
+  const listing = await listTree(cwd, false, MAX_SEARCH_ENTRIES, false);
+  return {
+    paths: listing.entries.map((entry) => entry.relative + (entry.isDirectory ? "/" : "")),
+    truncated: listing.truncated,
+  };
+}
+
 /**
  * Rank a candidate path against a needle. Lower is better; `null` means no
  * match. Exported for tests — the ordering is a documented contract.

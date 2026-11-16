@@ -4,9 +4,9 @@
 [![security](https://github.com/codehausau/ask/actions/workflows/security.yml/badge.svg)](https://github.com/codehausau/ask/actions/workflows/security.yml)
 [![codeql](https://github.com/codehausau/ask/actions/workflows/codeql.yml/badge.svg)](https://github.com/codehausau/ask/actions/workflows/codeql.yml)
 
-One-shot LLM CLI in TypeScript. Attach files or whole directories as context,
-ask a question, get a single answer. **No tools, no agent loop, no follow-up
-turns** — exactly one `POST /v1/chat/completions` per invocation.
+User-driven LLM CLI and OpenTUI chat in TypeScript. Attach files or whole
+directories as context, ask a question, get a single answer. **No model tools,
+no agent loop** — one completion per CLI invocation or TUI submission.
 
 ```console
 $ ask '@src/context.ts - review this file for me'
@@ -23,15 +23,362 @@ matters should be enforced in code, not policy:
 | Property | This CLI |
 | --- | --- |
 | Tool / function calling | Impossible to send: `OneShotRequest` in [`src/chat.ts`](src/chat.ts) is the SDK's params type with `tools`, `tool_choice`, `functions`, `function_call`, `parallel_tool_calls`, `stream` **removed**, so setting one is a compile error |
-| Turns per invocation | Exactly one request, asserted in [`test/chat.test.ts`](test/chat.test.ts) |
+| Model turns | One completion per CLI invocation or TUI submission; no automatic tool-result or follow-up requests |
 | SDK surface used | One method; `createClient` returns a 1-method `ChatClient`, not the whole SDK client |
 | Model-driven file access | None — the model only sees paths **you** name with `@` |
-| Writes to your filesystem | Only with `--write`, only to the single file you attached, and only after [checks that fail closed](#editing-a-file). The model is given no tool and cannot choose to write; output otherwise goes to stdout |
+| Writes to your filesystem | CLI: explicit `/write` or `/create`. TUI: suggested updates to attached files require diff review and `/apply`. No model-triggered writes |
 | Network calls | One, to the endpoint you configure |
-| Runtime dependencies | Two: `openai` (the official SDK) and `marked` (markdown parsing, itself dependency-free) |
+| Direct runtime dependencies | `openai`, `marked`, and `@opentui/core`. OpenTUI adds native platform packages and transitive dependencies; see `pnpm-lock.yaml` |
 
 Everything the model receives can be printed before sending: `--dry-run` (exact
 JSON body) or `--show-context` (attachment list + token estimate, no API call).
+These preview flags belong to the existing CLI; the TUI manages references with `/context`.
+
+## Interactive chat TUI
+
+The TUI requires **Bun 1.3.14+**. The existing `ask` CLI still runs on Node 20+;
+it never imports OpenTUI. Package managers may warn about OpenTUI's newer engine
+requirements when installing under older Node versions.
+The `ask-tui` launcher starts Bun with `--no-env-file` so that only Ask's
+restricted `.env` loader runs. If invoking the Bun entry point directly, use
+`bun --no-env-file src/tui/index.ts`; invocations without that flag are refused.
+
+```bash
+pnpm install
+pnpm tui                        # source checkout; needs bun on PATH
+# Or, after building/installing the package:
+ask-tui                         # Bun must be on PATH
+ask-tui --model gpt-4o-mini
+```
+
+Endpoint/key configuration and restricted `.env` loading follow the CLI's rules.
+Use `--base-url` or an exported `OPENAI_BASE_URL` to select the endpoint; an
+automatic `.env` cannot select it. Run `ask-tui --help` for supported flags.
+
+### Chat, attachments and suggested edits
+
+Type `@` anywhere at a word boundary in your message to open a file/folder
+popup immediately above the composer. Keep typing to filter and use Up/Down to
+move. **Enter** selects the highlighted entry without sending; **Tab** also
+selects. Escape closes the popup; typing `@` again reopens it without inserting
+a duplicate sigil. Deleting and retyping a mention also reopens it. Paths with spaces are quoted automatically;
+you can also type `@"path with spaces.ts"` yourself. When no candidate popup is
+active, **Enter** sends. **Shift+Enter** always adds a newline. PageUp/PageDown
+and the mouse wheel scroll the transcript.
+
+Both `@` and `/attach` hide dotfiles/dotfolders by default. Start a filename
+component with `.` to reveal matching hidden entries, for example `@.` or
+`@src/.config` (or `/attach src/.`). A period in a normal filename extension
+does not reveal hidden paths. Secret/build-directory skip rules still apply.
+
+The composer has a blue left border matching user messages, two columns of
+inner padding on each side, and half-block
+top/bottom caps (`▄` / `▀`) for visual spacing. Terminal rows remain whole cells;
+the half-height appearance comes from these glyphs. The caps are decorative and
+never become part of your prompt or clipboard text selected from the editor.
+User messages in chat history use the same two-column side padding and
+half-block top/bottom spacing, keeping their blue left border.
+Ordinary left-clicks in read-only text or the background return keyboard focus
+to the prompt without preventing text selection. Scrollbars, popups and the
+sidebar divider retain their own mouse behavior; clicks inside the editor
+still position its cursor normally.
+
+User messages have a contrasting background and left border; replies appear
+without separate `You`/`Assistant` label lines.
+
+### Command and context popups
+
+Type `/` at the start of the composer to open command completion above it. Search
+command names **and descriptions**, case-insensitively (for example `/remove skill`).
+Use Up/Down to navigate, **Enter** to run a command, or **Tab** to complete its name
+without running it. As the query changes, the best-ranked result is highlighted
+(so `/skil` selects `/skill`, and an exact name wins over description matches).
+Commands that manage context open a second searchable list:
+
+- `/attach` — toggle files or folders in context locally, without sending a prompt.
+- `/detach` — choose an attached reference or individual expanded file to remove.
+- `/skill` or `/skills` — open the same searchable skill-selection popup.
+- `/unskill` — choose an active skill to remove.
+- `/context` — manage references, expanded files and skills together; restore
+  excluded files, and inspect working-directory/session information in a
+  read-only summary, separate from the selectable actions.
+
+The context popup has separate **Skills** and **Files** sections. Empty sections
+say **No skills attached** or **No files attached**; filtering existing context
+to zero results instead shows **No matching skills/files**. Section headings and
+empty-state labels are not selectable actions.
+Each section also has an **Add skills…** or **Add files…** action that opens its
+selector. Choosing a file/folder attaches it immediately for future requests;
+it does not send anything to the model or insert a question automatically.
+In `/attach`, use Up/Down and **Enter or Tab** to toggle the highlighted file/folder.
+Attached entries show `✓`; selecting one again detaches it. Detaching an individual
+file included through a folder excludes that file while keeping the folder
+attached. The popup stays open for additional changes, and no source files are deleted.
+
+Keep typing after the command's space to filter its list. Enter applies the
+highlighted action; the popup stays open for further changes. Lists scroll as
+you move past the visible rows. Escape closes a management popup and clears its
+command from the composer. Direct `/detach <path>` and `/unskill <name>` forms
+still work. All of these operations are local—no model request or source-file
+deletion occurs. Resolve pending edit proposals before changing context.
+
+Removing a file included through a folder excludes that file on later turns,
+before reading it or consuming context budgets. The parent folder stays attached.
+Use the restore entry in `/context`, or explicitly mention the file again, to
+reattach it. Explicitly mentioning a whole folder restores its excluded children.
+Expanded file lists reflect the most recent request or local attachment refresh. Earlier answers may
+still quote removed context; `/new` is the way to clear conversation history too.
+
+### Copying text
+
+Select answer text with the mouse, then press **Ctrl+C** to copy it. Selected
+composer text can also be copied. **Without a selection, Ctrl+C exits**;
+**Ctrl+D always exits**, even with text selected. `/copy` copies the last answer
+as Markdown (including code fences), without needing a selection.
+These are explicit local actions, not model tools; responses never automatically
+change your clipboard.
+
+Copy uses the terminal's **OSC52 clipboard support**, which may need to be enabled
+in your terminal or multiplexer. If unsupported, use your terminal's native
+selection (often **Shift+drag**), or launch `ask-tui --no-mouse` and use your usual
+terminal copy shortcut. With mouse handling disabled, use PageUp/PageDown to scroll.
+
+### Pasting and Mac shortcuts
+
+**Ctrl+V** pastes plain text from the local system clipboard into the composer,
+replacing selected draft text or inserting at the cursor. **Command+C/V** are
+also supported when the terminal forwards Command as the enhanced keyboard
+protocol's Super modifier. Command+C copies highlighted text without exiting;
+with no selection it does nothing. Alt/Option is not treated as Command.
+
+Most Mac terminals handle **Command+V** themselves and deliver a native paste;
+that path works too, including multiline text, even after selecting transcript
+text. Pasting never submits the prompt. Command+C may likewise be owned by your
+terminal; use its native selection or `--no-mouse` in that case.
+
+Local clipboard reads use OpenTUI's built-in native API, only after an explicit
+paste shortcut. Reads are bounded to 1 MiB and two seconds, with no extra library
+or clipboard subprocess. If the draft changes while a read is pending, paste
+again rather than risking insertion at the wrong place. Unsupported clipboard
+access leaves the draft unchanged and suggests native terminal paste.
+
+In SSH/remote sessions, use the terminal's native paste shortcut (usually
+Command+V on Mac or Ctrl+Shift+V elsewhere). The TUI deliberately does not read
+the remote machine's clipboard or query the client's clipboard through OSC52.
+
+### Themes
+
+Choose the starting theme on the command line or export a shell default:
+
+```bash
+ask-tui --theme dracula
+export ASK_THEME=tokyo-night
+ask-tui
+# From a checkout:
+pnpm tui --theme high-contrast-light
+```
+
+`--theme` overrides `ASK_THEME`; without either, the theme is `ask`. Unknown or
+empty names are rejected before starting the UI. Export `ASK_THEME` in your
+shell; it is not loaded from automatic `.env` files. `/theme` can override the
+starting theme for the rest of the current run without changing the environment.
+
+Run `/theme` to open a searchable theme picker. Type a name
+(for example `/theme dracula` or `/theme high-contrast-light`).
+**Up/Down** or the mouse wheel over the picker previews highlighted choices live;
+filtering previews the best match too. **Enter** or **Tab** keeps the preview.
+**Escape** restores the theme in use before opening the picker, as does leaving
+the theme command without confirming. `✓` marks that original choice. The picker
+initially highlights the current theme when no filter is given. This is entirely local—no
+model request or filesystem update is made.
+
+The 40 bundled `@termcn/opentui` themes include `default`, `amoled`, `tokyo-night`,
+`catppuccin`, `dracula`, `github`, `gruvbox`, `nord`, `high-contrast` and
+`high-contrast-light`. These are the registry's actual fixed palettes, not
+fabricated dark/light pairs; `high-contrast-light` is the supplied light option.
+The original appearance remains available as `ask` (the default).
+Theme source files are adapted to ask's UI color roles, including selection
+colors, without installing React, a theme provider, or another runtime library.
+Spacing and border shapes remain unchanged. See `THIRD_PARTY_NOTICES.md` for
+source revision and license.
+
+Changes recolor existing messages, inline Markdown, message/input backgrounds,
+dividers, popups, footer and sidebar, as well as future messages. The choice lasts
+for the current TUI run, survives `/new`, and is not saved to disk. Custom theme
+files and automatic light/dark detection are not supported yet.
+
+### Footer and session sidebar
+
+The persistent footer stays within the chat pane, directly beneath the prompt,
+and does not extend into the sidebar. It shows the working directory on the left and the last
+response's **input + output token count** on the right, formatted with one decimal
+and a `K` suffix (`1.2K` means approximately 1,200 tokens). Exact counts remain in
+the sidebar. Usage stats no longer add
+a message to the transcript after every answer.
+
+At **120 columns or wider**, a sidebar shows context usage, separate input/output
+counts, running session totals, active skills, expanded referenced files, pending
+edits, and the right-aligned working directory path (without a heading) on its bottom row,
+aligned with the chat footer. It hides and restores automatically
+on resize; its details scroll independently with the mouse wheel.
+Long sidebar paths are truncated from the left with `…`, preserving the current
+directory and nearest parents. Widening the sidebar restores more of the path.
+
+Drag the sidebar's **left divider** to adjust its width. It starts at 32 columns,
+has a 24-column minimum, and is capped to keep at least 60 columns for chat and
+at most half of the available pane area for the sidebar. The divider highlights
+and shows a resize cursor on hover where supported by the terminal.
+
+Your chosen width is remembered for the current TUI run (including `/new`), not
+written to disk. Smaller terminals temporarily clamp the width or hide the sidebar;
+it returns to the chosen width when there is room again. Mouse resizing requires
+mouse reporting and is unavailable under `--no-mouse`.
+
+Counts come from the provider's response, not a local estimate. Missing counts
+are shown as unknown, and incomplete session totals are marked partial. Context
+usage describes the **last completed request plus its output**, not an estimate
+of the next request. No model metadata requests are made. To display a capacity
+and percentage, supply the actual model/server limit explicitly:
+
+```bash
+ask-tui --context-window 32768
+# Or set a default in your shell:
+export ASK_CONTEXT_WINDOW=32768
+ask-tui
+# From a checkout:
+pnpm tui --context-window 32768
+```
+
+The flag overrides `ASK_CONTEXT_WINDOW`; both require a positive integer token
+count. Export the variable in your shell (it is not loaded from automatic `.env`
+files). With a capacity, the footer shows usage such as `1.2K tokens (3.7%)`,
+and the sidebar shows the exact count, capacity and percentage. Percentages use
+the last response's input plus output, not cumulative session totals.
+Without either setting the sidebar shows an unknown window limit and the footer
+omits the percentage. These settings are display-only: they do not set the
+server's context size or change request limits.
+
+### Ordinary chat and edits
+
+Set the request timeout for either interface with `--timeout <seconds>` or
+export `ASK_TIMEOUT` in your shell:
+
+```bash
+ask-tui --timeout 300
+ask --timeout 300 'Explain this code'
+export ASK_TIMEOUT=300
+```
+
+The flag overrides the environment variable; the default is 120 seconds per
+request attempt. Positive fractional seconds are supported (millisecond
+precision). `ASK_TIMEOUT` is not loaded from automatic `.env` files. Retry
+behavior is unchanged: the TUI never retries automatically; the Node CLI allows
+up to two SDK retries, so total elapsed time can exceed the timeout.
+
+For example:
+
+```text
+Explain the validation in @src/example.ts
+What would you improve about that function?
+```
+
+References remain attached until `/detach <path>` or `/new`. Resolved file/folder
+attachments appear in the sidebar as soon as submission context is validated,
+before the model responds, and remain attached if the request fails. Resolved
+paths are retained rather than re-running a fuzzy search. Their contents are
+re-read before each submission and appended **after the message** as `<file>`
+blocks; previous file contents are not duplicated in chat history. Attachment
+skip rules and size caps are shared with the CLI. Removed references fail visibly;
+detach them rather than silently sending a different file. A folder reference
+includes its children except for files explicitly excluded through context management.
+
+The model can suggest edits to any complete, editable file in the current
+attachments, **even when you did not name the file in the latest question**.
+It produces ordinary response text with a defined format, not API tool calls:
+
+> ```text
+> Reject empty names before doing the work.
+>
+> <update path="src/example.ts">
+> <<<<<<< SEARCH
+> function greet(name: string) {
+> =======
+> function greet(name: string) {
+>   if (!name.trim()) throw new Error("Name is required");
+> >>>>>>> REPLACE
+> </update>
+> ```
+
+The TUI displays the answer and proposed diffs. **Nothing is written until you
+submit `/apply`**. `/review` shows the diff again; `/reject` discards the edits.
+Review and apply are local operations, with no second LLM request. Resolve pending
+edits before sending another question. `/apply` approves the entire pending batch.
+
+Safety rules:
+
+- Paths must exactly match an attached file in the current request, inside the
+  working directory. Truncated files and symlinks are read-only.
+- SEARCH must match exactly once, byte-for-byte in UTF-8. There is no fuzzy matching.
+  Multiple edits match the original file and must not overlap.
+- Malformed blocks, incomplete responses, or any invalid edit invalidate the
+  entire proposal. Examples inside Markdown code fences are not actionable.
+- Identity, contents and parent-directory checks run before writing. Changed
+  files require a fresh request; stale proposals are never rebased automatically.
+- Existing guarded atomic replacement preserves ordinary permissions. Unlike
+  CLI `/write`, TUI approval can update dirty/untracked files: you are approving
+  a diff against the exact bytes sent, not relying on Git for an undo copy.
+- All targets are preflighted before any write, but **multi-file writes are not
+  one transaction**. A later failure can leave earlier files updated; the error
+  names any files already written. Review your diffs and keep backups/commits.
+
+This initial TUI supports updates to existing files only. Use `ask /create` for
+new files. It has **in-memory history only** (separate from CLI sessions), no
+automatic compaction/pruning, no streaming, no model tools, and no automatic
+retries. Use `/new` to clear history, attachments, skills and pending edits. `/context`
+opens the context manager; `/help` lists commands; `/quit` or Ctrl+D exits.
+Ctrl+C exits only when no text is selected; otherwise it copies the selection.
+Long conversations resend their history and can exceed the provider's window.
+
+### Skills in the TUI
+
+Use the same skill directories and discovery rules as `ask`:
+
+```bash
+ask-tui --list-skills                      # offline; no API key or terminal needed
+ask-tui --skill code-review --skill style  # select startup instructions
+```
+
+Inside the TUI:
+
+```text
+/skill                  open the searchable skill-selection popup
+/skills                 alias of /skill; opens the same popup
+/skills review          open it filtered by skill name/description
+/skill code-review      open it filtered to code-review
+/unskill code-review    remove an exact active name from future requests
+/unskill                open the active-skill removal popup
+```
+
+Enabled skills persist for this conversation. Each skill is included at most
+once; multiple skills compose in activation order in the system
+prompt. The resolved instruction file is re-read each turn, with the same 128 KB
+cap as the CLI. Missing or oversized selected files stop the request rather than
+silently dropping instructions or switching to a different skill. Only instruction
+text is loaded—bundled scripts/assets are not executed or attached. The model
+cannot select skills, read extra files, or bypass edit approval.
+
+Use Up/Down to move and Enter to toggle a skill on or off; active skills show a
+`✓` marker. The popup stays open so you can change several skills. Escape closes it and clears
+the command from the composer. Both aliases search names and descriptions, and
+neither makes a model request. `/unskill` and `/context` can also remove skills.
+
+Resolve pending edits before changing skills. `/new` clears skills as well as
+history, attachments and proposals, including skills selected with `--skill`.
+Removing a skill does not remove earlier answers influenced by it from history;
+use `/new` for a clean conversation. No additional libraries are required.
+
+Run the native UI tests with `pnpm test:tui` under Bun. Controller/protocol tests
+also run in the normal Node test suite without importing OpenTUI.
 
 ## Install
 
@@ -382,6 +729,7 @@ when Git cannot verify the undo copy.
 | Flag | Meaning |
 | --- | --- |
 | `-m, --model <name>` | model id (env `ASK_MODEL`, default `gpt-4o-mini`) |
+| `--timeout <seconds>` | per-attempt request timeout (env `ASK_TIMEOUT`, default `120`) |
 | `-s, --system <text>` / `--system-file <path>` | system prompt (env `ASK_SYSTEM`) |
 | `--base-url <url>` | OpenAI-compatible endpoint (env `OPENAI_BASE_URL`) |
 | `--allow-insecure-http` | explicitly allow unencrypted HTTP to a non-loopback endpoint |
@@ -465,10 +813,10 @@ Two deliberate limits:
   once per line. Every branch either styles a token or emits it verbatim, so a
   bug can only mis-colour a word, never mangle code. A test asserts that stripping
   the escapes from any highlighted sample returns the input exactly.
-- **Two dependencies, not thirty.** `marked` parses the markdown (it has no
+- **Small CLI rendering surface.** `marked` parses the markdown (it has no
   dependencies of its own) and the ANSI renderer here is ~200 lines.
   `marked-terminal` would look better and pull in `highlight.js`, `yargs` and
-  `parse5` behind it; that trade costs the claim at the top of this README.
+  `parse5` behind it. The separate TUI uses OpenTUI's rendering components.
 
 ### Colour
 
@@ -939,6 +1287,15 @@ src/refs.ts           @ref → paths: exact path, glob, or ranked search
 src/skip.ts           skip rules shared by attachment and search
 src/context.ts        resolved paths → sorted, filtered, capped text blocks
 src/chat.ts           request builder + one-shot transport (no tools by construction)
+src/tui/index.ts      separate Bun entry point and endpoint configuration
+src/tui/launcher.ts   Node launcher: start Bun with automatic .env loading disabled
+src/tui/ui.ts         OpenTUI transcript, composer, mention picker and edit review
+src/tui/chat.ts       user-driven chat state; one completion per submission
+src/tui/picker.ts     searchable local slash-command registry and popup item types
+src/tui/theme.ts      live theme application and semantic color bindings
+src/tui/themes.ts     theme catalog and palette adapter
+src/tui/themes/       bundled termcn theme definitions
+src/tui/updates.ts    strict text update protocol, validation and approved writes
 src/options.ts        the flag table, shared with the completion test
 src/cli.ts            flags, stdin, .env, output modes
 completions/ask.bash  bash/zsh completion + optional fzf picker
@@ -978,7 +1335,7 @@ npm deps and those SHA pins current.
 
 | Workflow | Trigger | What it does |
 | --- | --- | --- |
-| [`ci.yml`](.github/workflows/ci.yml) | push, PR | `tsc --noEmit`; shellcheck on the completion script; tests on Node 20/22/24; offline CLI previews; packs and installs the tarball, verifies its version/completions, and runs an npm publish dry-run |
+| [`ci.yml`](.github/workflows/ci.yml) | push, PR | `tsc --noEmit`; shellcheck on the completion script; tests on Node 20/22/24; native OpenTUI tests on Bun 1.3.14/1.4.4; offline CLI previews; packs and installs the tarball, verifies its version/completions, and runs an npm publish dry-run |
 | [`security.yml`](.github/workflows/security.yml) | push, PR, weekly | `pnpm audit` (runtime blocking, dev advisory); dependency review on PRs; Trivy vulns + secrets + misconfig; TruffleHog over full git history; actionlint + zizmor on these workflows; CycloneDX SBOM artifact |
 | [`codeql.yml`](.github/workflows/codeql.yml) | push, PR, weekly | CodeQL `security-extended` for javascript-typescript |
 | [`scorecard.yml`](.github/workflows/scorecard.yml) | weekly, branch protection changes | OpenSSF Scorecard (public repos only; guarded by a visibility check) |

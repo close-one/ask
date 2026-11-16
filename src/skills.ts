@@ -309,16 +309,18 @@ export async function loadSkill(
   skill: SkillSummary,
   matched: "name" | "search",
 ): Promise<LoadedSkill> {
-  if (skill.bytes > MAX_SKILL_BYTES) {
+  const text = await readFile(skill.file, "utf8");
+  const bytes = Buffer.byteLength(text, "utf8");
+  if (bytes > MAX_SKILL_BYTES) {
     throw new SkillResolutionError(
-      `${skill.name} is ${Math.round(skill.bytes / 1024)} KB, over the ${Math.round(
+      `${skill.name} is ${Math.round(bytes / 1024)} KB, over the ${Math.round(
         MAX_SKILL_BYTES / 1024,
       )} KB skill limit`,
       skill.name,
     );
   }
-  const front = parseFrontMatter(await readFile(skill.file, "utf8"));
-  return { ...skill, body: front.body, matched };
+  const front = parseFrontMatter(text);
+  return { ...skill, bytes, body: front.body, matched };
 }
 
 /**

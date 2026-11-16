@@ -5,6 +5,7 @@
 // error rather than a code-review promise. There is no loop in this module.
 
 import OpenAI from "openai";
+import { DEFAULT_RESPONSE_TIMEOUT_MS } from "./timeout.ts";
 import type {
   ChatCompletion,
   ChatCompletionCreateParamsNonStreaming,
@@ -59,6 +60,8 @@ export interface ClientOptions {
   readonly baseURL?: string | undefined;
   readonly timeoutMs?: number;
   readonly maxRetries?: number;
+  /** A TUI lifetime signal cancels an in-flight request on exit. */
+  readonly signal?: AbortSignal;
 }
 
 export interface HistoryMessage {
@@ -120,8 +123,9 @@ export function isInsecureHttpEndpoint(baseURL: string | undefined): boolean {
 export function createClient({
   apiKey,
   baseURL,
-  timeoutMs = 120_000,
+  timeoutMs = DEFAULT_RESPONSE_TIMEOUT_MS,
   maxRetries = 2,
+  signal,
 }: ClientOptions): ChatClient {
   if (!apiKey && isLoopbackEndpoint(baseURL)) {
     apiKey = "local";
@@ -132,7 +136,7 @@ export function createClient({
   const client = new OpenAI({ apiKey, baseURL, timeout: timeoutMs, maxRetries });
   // Narrow the SDK down to the one call we make, so nothing else is reachable.
   return {
-    chat: { completions: { create: (body) => client.chat.completions.create(body) } },
+    chat: { completions: { create: (body) => client.chat.completions.create(body, { signal }) } },
   };
 }
 

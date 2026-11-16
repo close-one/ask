@@ -34,7 +34,7 @@ _ASK_FLAGS="--all-matches --allow-insecure-http --api-key --apply --base-url --c
 --force --session-max-tokens --show-context --show-session --skill --switch \
 --system --write \
 --system-file \
---temperature --token-field --version -V -f -h -m -q -s"
+--temperature --timeout --token-field --version -V -f -h -m -q -s"
 
 # Chat-style verbs, accepted as the first word after `ask`.
 _ASK_VERBS="/compact /create /diff /new /reset /session /sessions /skills /switch /write"
@@ -257,7 +257,7 @@ _ask_complete() {
       _ask_quote_completions
       return 0
       ;;
-    -s | --system | --base-url | --api-key | --max-tokens | --temperature | \
+    -s | --system | --base-url | --api-key | --max-tokens | --temperature | --timeout | \
       --max-file-bytes | --max-total-bytes | --max-files)
       # Free-form values: guessing would only get in the way.
       return 0

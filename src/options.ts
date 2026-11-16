@@ -12,6 +12,7 @@ export const OPTIONS = {
   file: { type: "string", short: "f", multiple: true },
   "max-tokens": { type: "string" },
   temperature: { type: "string" },
+  timeout: { type: "string" },
   "token-field": { type: "string" },
   "max-file-bytes": { type: "string" },
   "max-total-bytes": { type: "string" },

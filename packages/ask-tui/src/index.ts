@@ -11,6 +11,7 @@ import { terminalField } from "@codehaus-au/ask/internal/terminal";
 import { DEFAULT_RESPONSE_TIMEOUT_MS, timeoutSecondsToMs } from "@codehaus-au/ask/internal/timeout";
 import { TuiChat } from "./chat.ts";
 import { discoverSkills, skillSearchPaths, SkillResolutionError } from "@codehaus-au/ask/internal/skills";
+import { loadCustomThemes } from "./custom-themes.ts";
 import { themeModes } from "./themes.ts";
 
 const HELP = `ask-tui — user-driven OpenTUI chat (Bun 1.3.14+)
@@ -39,6 +40,9 @@ request fits, and a message too large even without history is refused before
 sending. Without it, resent history is capped at about 32000 tokens.
 --timeout (ASK_TIMEOUT, timeout): default 120 seconds per request, no retries.
 --theme (ASK_THEME, tui.theme): default ask. Use /theme to preview and change themes.
+Custom themes: themes/<name>.json(c) in any config directory, with colour roles
+(background, panel, accent, text, muted, heading, summary, border, code, warning,
+error, selectionBg, selectionFg) as hex, and optional "extends" and "mode".
 --no-mouse (tui.mouse: false) leaves mouse selection to your terminal; /copy uses OSC52.
 `;
 
@@ -97,8 +101,14 @@ async function main() {
   }
   const model = settings.model ?? DEFAULT_MODEL;
   const timeoutMs = settings.timeout === undefined ? DEFAULT_RESPONSE_TIMEOUT_MS : timeoutSecondsToMs(settings.timeout);
+  const customThemes = await loadCustomThemes(loaded.directories);
   const theme = settings.tui.theme ?? "ask";
-  themeModes(theme); // Validate before creating a client or loading the native UI.
+  try {
+    themeModes(theme); // Validate before creating a client or loading the native UI.
+  } catch (error) {
+    // A broken custom theme file explains why its name is unknown.
+    throw new Error([error instanceof Error ? error.message : String(error), ...customThemes.notes].join("\n"));
+  }
   const apiKey = settings.endpoint.apiKey;
   if (!apiKey && !isLoopbackEndpoint(baseURL)) {
     // .env files that earlier versions read: the working directory and install location.
@@ -136,7 +146,7 @@ async function main() {
   process.once("SIGHUP", stop);
   try {
     // Shown in the transcript: stderr would be drawn over (or under) the UI.
-    const notices = [...loaded.notes, ...startupInstructions.notes].map((note) => note.charAt(0).toUpperCase() + note.slice(1));
+    const notices = [...loaded.notes, ...customThemes.notes, ...startupInstructions.notes].map((note) => note.charAt(0).toUpperCase() + note.slice(1));
     if (startupInstructions.files.length) {
       notices.push(`Instructions: ${startupInstructions.files.map((file) => terminalField(file.display)).join(", ")}`);
     }

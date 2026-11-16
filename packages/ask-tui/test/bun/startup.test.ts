@@ -86,6 +86,9 @@ test("tui.json layers apply to startup: global, --config, ASK_THEME, then the fl
     await mkdir(path.join(xdg, "ask"), { recursive: true });
     await mkdir(custom);
     await writeFile(path.join(xdg, "ask", "tui.json"), '{ "theme": "global-theme" }');
+    await mkdir(path.join(xdg, "ask", "themes"));
+    await writeFile(path.join(xdg, "ask", "themes", "mine.json"), '{ "extends": "nord", "accent": "#123456" }');
+    await writeFile(path.join(xdg, "ask", "themes", "broken.json"), '{ "accent": "red" }');
     await writeFile(path.join(custom, "tui.jsonc"), '{ "theme": "custom-theme", /* comment */ }');
     for (const file of [path.join(xdg, "ask", "tui.json"), path.join(custom, "tui.jsonc")]) await chmod(file, 0o600);
     const env: NodeJS.ProcessEnv = { ...process.env, XDG_CONFIG_HOME: xdg, ASK_STATE_DIR: path.join(cwd, "state") };
@@ -100,6 +103,9 @@ test("tui.json layers apply to startup: global, --config, ASK_THEME, then the fl
       { args: ["--config", "custom"], exported: "exported-theme", expected: /Unknown theme: exported-theme/ },
       { args: ["--config", "custom", "--theme", "flag-theme"], exported: "exported-theme", expected: /Unknown theme: flag-theme/ },
       { args: ["--config", "missing"], exported: undefined, expected: /--config .*missing.* is not a directory/ },
+      // A custom theme is selectable; a broken one says why it is unknown.
+      { args: ["--theme", "mine"], exported: undefined, expected: /no API key/ },
+      { args: ["--theme", "broken"], exported: undefined, expected: /Unknown theme: broken[\s\S]*accent must be a hex colour/ },
     ]) {
       const bootstrap = `
         process.argv = [process.execPath, "index.ts", ...${JSON.stringify(args)}];

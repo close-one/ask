@@ -85,6 +85,7 @@ chmod 600 ~/.config/ask/ask.jsonc
 | `cli.json` or `cli.jsonc` | CLI settings: `sessionMaxTokens`, `next` |
 | `tui.json` or `tui.jsonc` | TUI settings: `theme`, `contextWindow`, `mouse` |
 | `AGENTS.md` | personal or project instructions added to every request (see below) |
+| `themes/<name>.json(c)` | custom `ask-tui` themes (see the TUI README) |
 | `skills/<name>/` | skills, in the global directory and the project's `.ask/` (see [Skills](#skills)) |
 
 **Layers**, lowest precedence first; later layers win:

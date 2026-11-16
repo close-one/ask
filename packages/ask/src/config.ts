@@ -403,6 +403,9 @@ export interface LoadedSettings {
   readonly projectRoot: string;
   /** Instruction files in precedence order (lowest first), not yet read. */
   readonly instructions: readonly InstructionEntry[];
+  /** Config directories, lowest precedence first (global, custom, project .ask/),
+   * whether or not they exist; for files such as themes/. */
+  readonly directories: readonly string[];
 }
 
 export interface LoadOptions {
@@ -564,9 +567,11 @@ export async function loadSettings(options: LoadOptions = {}): Promise<LoadedSet
     apply(label, listInstructions(substitute(layer.data, env) as Plain, global, label, null), [layer.file]);
   }
 
+  const directories = [global];
   const custom = options.configDir ?? env["ASK_CONFIG"];
   if (custom) {
     const dir = path.resolve(cwd, custom);
+    directories.push(dir);
     if (!await stat(dir).then((info) => info.isDirectory(), () => false)) {
       throw new ConfigFileError(`${options.configDir ? "--config" : "ASK_CONFIG"} ${terminalField(dir)} is not a directory`);
     }
@@ -588,6 +593,7 @@ export async function loadSettings(options: LoadOptions = {}): Promise<LoadedSet
   // Project instructions are the repository's content: read them, but keep an
   // untrusted project's files inside it.
   const within = trusted ? null : root;
+  directories.push(path.join(root, ".ask"));
   await agents(root, "project AGENTS.md", within);
   let dotAskAgents = false;
   for (const file of files) {
@@ -631,7 +637,7 @@ export async function loadSettings(options: LoadOptions = {}): Promise<LoadedSet
       cli: (merged["cli"] ?? {}) as Settings["cli"],
       tui: (merged["tui"] ?? {}) as Settings["tui"],
     } as Settings,
-    sources, layers, notes, projectRoot: root, instructions,
+    sources, layers, notes, projectRoot: root, instructions, directories,
   };
 }
 

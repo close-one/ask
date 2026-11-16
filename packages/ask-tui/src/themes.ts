@@ -67,16 +67,39 @@ export type ThemePalette = Readonly<Record<ThemeRole, string>> & {
   readonly selectionFg?: string;
 };
 export type ThemeMode = "dark" | "light";
-export const THEME_NAMES = ["ask", ...Object.keys(themes).sort()];
+/** Built-in names, then custom ones as addCustomTheme registers them. "ask" stays first. */
+export const THEME_NAMES: string[] = ["ask", ...Object.keys(themes).sort()];
+
+/** User themes from config directories; they take precedence over built-ins. */
+const custom = new Map<string, { palette: ThemePalette; mode: ThemeMode; file: string }>();
+
+export function addCustomTheme(name: string, palette: ThemePalette, mode: ThemeMode, file: string): void {
+  custom.set(name, { palette, mode, file });
+  if (!THEME_NAMES.includes(name)) {
+    THEME_NAMES.push(name);
+    THEME_NAMES.splice(1, THEME_NAMES.length - 1, ...THEME_NAMES.slice(1).sort());
+  }
+}
+
+/** A short description for the theme picker. */
+export function themeDescription(name: string): string {
+  const entry = custom.get(name);
+  if (entry) return `Custom: ${entry.file}`;
+  return name === "ask" ? "Original ask colors" : "";
+}
 
 /** termcn supplies fixed palettes, not invented light/dark variants. */
 export function themeModes(name: string): readonly ThemeMode[] {
+  const entry = custom.get(name);
+  if (entry) return [entry.mode];
   if (name !== "ask" && !Object.hasOwn(themes, name)) throw new Error(`Unknown theme: ${name}`);
   return name === "high-contrast-light" ? ["light"] : ["dark"];
 }
 
 export function themePalette(name: string, mode: ThemeMode = themeModes(name)[0]!): ThemePalette {
   if (!themeModes(name).includes(mode)) throw new Error(`Theme ${name} does not provide a ${mode} variant.`);
+  const entry = custom.get(name);
+  if (entry) return entry.palette;
   if (name === "ask") return ASK_PALETTE;
   const { colors, border } = themes[name]!;
   return {

@@ -196,8 +196,8 @@ ask-tui
 pnpm tui --theme high-contrast-light
 ```
 
-`--theme` overrides `ASK_THEME`; without either, the theme is `ask`. Unknown or
-empty names are rejected before starting the UI. Set `ASK_THEME` in your shell
+`--theme` overrides `ASK_THEME`; without either, the theme is `ask`. Unknown
+names are rejected before starting the UI; an empty value means "not set". Set `ASK_THEME` in your shell
 or as `theme` in `tui.json`. `/theme` can override the
 starting theme for the rest of the current run without changing the environment.
 
@@ -222,8 +222,32 @@ source revision and license.
 
 Changes recolor existing messages, inline Markdown, message/input backgrounds,
 dividers, popups, footer and sidebar, as well as future messages. The choice lasts
-for the current TUI run, survives `/new`, and is not saved to disk. Custom theme
-files and automatic light/dark detection are not supported yet.
+for the current TUI run, survives `/new`, and is not saved to disk. Automatic
+light/dark detection is not supported yet.
+
+#### Custom themes
+
+Put `themes/<name>.json` (or `.jsonc`) in any config directory (`~/.config/ask/`,
+a `--config` directory, or the project's `.ask/`), then choose it like any other
+theme. Keys are the TUI's colour roles, as hex colours:
+
+```jsonc
+// ~/.config/ask/themes/midnight.jsonc
+{
+  "extends": "nord",      // optional: any built-in or earlier custom theme
+  "mode": "dark",         // optional: "dark" (default) or "light"
+  "accent": "#88c0d0",
+  "panel": "#3b4252",
+}
+```
+
+Roles: `background`, `panel`, `accent`, `text`, `muted`, `heading`, `summary`,
+`border`, `code`, `warning`, `error`, `selectionBg` and `selectionFg`. Unset roles
+come from `extends`, or else from the `ask` palette. A later directory's theme
+replaces an earlier one of the same name, and a custom theme may replace a
+built-in. Values must be hex colours, so a theme file can only change colours,
+never write to the terminal. A broken file is skipped with a note; selecting it
+explains why it is unknown. The `/theme` picker marks custom themes with their file.
 
 ### Footer and session sidebar
 

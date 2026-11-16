@@ -5,7 +5,7 @@ import type { SkillSummary } from "@codehaus-au/ask/internal/skills";
 import type { TuiChat } from "./chat.ts";
 import type { ChatLayout } from "./layout.ts";
 import type { TuiTheme } from "./theme.ts";
-import { THEME_NAMES, themeModes, type ThemeMode } from "./themes.ts";
+import { THEME_NAMES, themeDescription, themeModes, type ThemeMode } from "./themes.ts";
 import { activeMention, serializeMention } from "./mentions.ts";
 import { filterPopupItems, isFileCandidateVisible, SLASH_COMMANDS, type PopupItem } from "./picker.ts";
 
@@ -95,7 +95,7 @@ export function createCompletion(renderer: CliRenderer, chat: TuiChat, layout: C
         themeBeforePreview ??= { name: theme.name, mode: theme.mode };
         matches = filterPopupItems(THEME_NAMES.flatMap((name): PopupItem[] => themeModes(name).map((variant) => ({
           kind: "theme", value: `${name} ${variant}`, label: `${themeBeforePreview!.name === name && themeBeforePreview!.mode === variant ? "✓ " : "  "}${name} · ${variant}`,
-          description: name === "ask" ? "Original ask colors" : "",
+          description: themeDescription(name),
         }))), query);
       } else if (command[1] === "skill" || command[1] === "skills") {
         mode = "skills"; void loadSkillCatalog();

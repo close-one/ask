@@ -54,7 +54,10 @@ Configuration is shared with `ask`: layered JSON in `~/.config/ask/`, an optiona
 
 ```jsonc
 // ~/.config/ask/tui.jsonc
-{ "theme": "dracula", "contextWindow": 32768, "mouse": true }
+{
+  "$schema": "https://raw.githubusercontent.com/codehausau/ask/main/packages/ask/schema/tui.schema.json",
+  "theme": "dracula", "contextWindow": 32768, "mouse": true,
+}
 ```
 
 A project cannot choose the endpoint or key until you run `ask /trust`, and
@@ -234,6 +237,7 @@ theme. Keys are the TUI's colour roles, as hex colours:
 ```jsonc
 // ~/.config/ask/themes/midnight.jsonc
 {
+  "$schema": "https://raw.githubusercontent.com/codehausau/ask/main/packages/ask-tui/schema/theme.schema.json",
   "extends": "nord",      // optional: any built-in or earlier custom theme
   "mode": "dark",         // optional: "dark" (default) or "light"
   "accent": "#88c0d0",

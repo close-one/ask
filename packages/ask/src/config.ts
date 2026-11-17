@@ -56,8 +56,8 @@ export interface Settings {
   readonly tui: { readonly theme?: string; readonly contextWindow?: number; readonly mouse?: boolean };
 }
 
-type Kind = "string" | "stringArray" | "boolean" | "positiveInteger" | "timeout" | "temperature";
-interface Shape { readonly [key: string]: Kind | Shape }
+export type Kind = "string" | "stringArray" | "boolean" | "positiveInteger" | "timeout" | "temperature";
+export interface Shape { readonly [key: string]: Kind | Shape }
 
 const ENDPOINT: Shape = { url: "string", apiKey: "string", organization: "string", project: "string" };
 const COMMON: Shape = {
@@ -68,6 +68,9 @@ const CLI: Shape = { sessionMaxTokens: "positiveInteger", next: "boolean" };
 const TUI: Shape = { theme: "string", contextWindow: "positiveInteger", mouse: "boolean" };
 /** The whole configuration, as ASK_CONFIG_CONTENT and flags express it. */
 const ALL: Shape = { ...COMMON, cli: CLI, tui: TUI };
+
+/** Each file's accepted settings; schema/*.schema.json must describe exactly these. */
+export const CONFIG_SHAPES: Readonly<Record<"ask" | "cli" | "tui", Shape>> = { ask: COMMON, cli: CLI, tui: TUI };
 
 /** Which file fills which part of the configuration. */
 const FILES = [

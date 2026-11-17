@@ -124,6 +124,18 @@ project may only list files inside itself, and a symlink leading out is not read
 key can stay out of the file: `"apiKey": "{env:WORK_LLM_KEY}"`. An unset
 variable resolves to an empty string, which falls through to lower layers.
 
+**Editor support.** JSON Schemas for each file are in
+[`packages/ask/schema/`](https://github.com/codehausau/ask/tree/main/packages/ask/schema)
+and in the npm package. Point a file at its schema for completion, descriptions
+and checking in editors such as VS Code (`ask` itself ignores `$schema`):
+
+```jsonc
+{ "$schema": "https://raw.githubusercontent.com/codehausau/ask/main/packages/ask/schema/ask.schema.json" }
+```
+
+Use `cli.schema.json` and `tui.schema.json` for `cli.json` and `tui.json`. The
+schemas describe the same rules the loader enforces; a test keeps them in step.
+
 **See the result** with `ask --show-config` (or `ask /config`). It lists every
 layer, every setting and where it came from, and anything ignored; API keys are
 never printed.

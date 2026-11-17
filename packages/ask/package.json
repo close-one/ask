@@ -79,6 +79,7 @@
   },
   "files": [
     "dist/src",
+    "schema",
     "completions",
     "README.md",
     "SECURITY.md"

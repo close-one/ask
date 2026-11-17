@@ -58,9 +58,10 @@ test("the npm tarball pins the matching core version and ships only the runnable
     "dist/src/launcher.js", "dist/src/index.js", "dist/src/ui.js", "dist/src/bunfig.toml",
     "dist/src/chat.js", "dist/src/picker.js", "dist/src/updates.js",
     "dist/src/themes.js", "dist/src/theme.js", "dist/src/themes/default.js", "dist/src/themes/dracula.js",
+    "schema/theme.schema.json",
   ]) assert.ok(files.has(required), `missing packaged file: ${required}`);
   for (const file of files) {
-    assert.ok(file.startsWith("dist/src/") ||
+    assert.ok(file.startsWith("dist/src/") || file.startsWith("schema/") ||
       ["package.json", "README.md", "SECURITY.md", "LICENSE", "THIRD_PARTY_NOTICES.md"].includes(file), `unexpected packaged file: ${file}`);
     assert.doesNotMatch(file, /(^|\/)\.env(?:\.|$)|(^|\/)\.npmrc$/);
   }

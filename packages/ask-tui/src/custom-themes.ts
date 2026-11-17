@@ -16,7 +16,9 @@ import { addCustomTheme, ASK_PALETTE, themeModes, themePalette, type ThemeMode, 
 const MAX_THEME_BYTES = 64 * 1024;
 const NAME = /^[a-z0-9][a-z0-9._-]{0,63}$/i;
 const COLOR = /^#[0-9a-f]{6}(?:[0-9a-f]{2})?$/i;
-const ROLES = new Set<string>([...Object.keys(ASK_PALETTE), "selectionBg", "selectionFg"]);
+/** Colour roles a theme file may set; schema/theme.schema.json lists exactly these. */
+export const THEME_ROLES: readonly string[] = [...Object.keys(ASK_PALETTE), "selectionBg", "selectionFg"];
+const ROLES = new Set<string>(THEME_ROLES);
 
 /** Parse and validate one theme file against already-registered themes. */
 function parseTheme(file: string, text: string): { palette: ThemePalette; mode: ThemeMode; notes: string[] } {

@@ -86,7 +86,7 @@ chmod 600 ~/.config/ask/ask.jsonc
 | `tui.json` or `tui.jsonc` | TUI settings: `theme`, `contextWindow`, `mouse` |
 | `AGENTS.md` | personal or project instructions added to every request (see below) |
 | `themes/<name>.json(c)` | custom `ask-tui` themes (see the TUI README) |
-| `skills/<name>/` | skills, in the global directory and the project's `.ask/` (see [Skills](#skills)) |
+| `skills/<name>/` | skills (see [Skills](#skills)) |
 
 **Layers**, lowest precedence first; later layers win:
 
@@ -753,7 +753,7 @@ alongside your files. `--skill` is repeatable and composes in the order given.
 
 | Behaviour | Detail |
 | --- | --- |
-| Where skills come from | `$ASK_SKILLS_DIR` (colon-separated), then `.ask/skills` and `.agents/skills` **in the current directory and every ancestor**, then `~/.config/ask/skills` and `~/.claude/skills`. First match wins, so a repository-local skill shadows a personal one |
+| Where skills come from | `$ASK_SKILLS_DIR` (colon-separated), then `.ask/skills` and `.agents/skills` **in the current directory and every ancestor**, then `<config dir>/skills` for a `--config` directory or `$ASK_CONFIG`, then `~/.config/ask/skills` and `~/.claude/skills`. First match wins, so a repository-local skill shadows a personal one |
 | Ancestor search | working in `repo/packages/thing` finds `repo/.agents/skills`, the way git finds its root — no configuration needed for a workspace-level skills directory |
 | Nesting | grouping directories are walked to 5 levels, which reaches a synced layout like `skills/synced/<bucket-id>/<skill>/SKILL.md`; symlink loops are guarded, and `assets/`, `scripts/`, `resources/`, `templates/`, `node_modules` and dot-directories are skipped |
 | The single-file trade-off | inside a directory dedicated to skills, any `.md` counts as one, so a scratch file will show up in `ask /skills` until you remove it |

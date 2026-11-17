@@ -304,3 +304,16 @@ test("a deeply nested skill set is still found, but the walk is bounded", async 
     `nested skill sets found, nothing beyond depth ${MAX_SKILL_DEPTH}`,
   );
 });
+
+test("a --config directory's skills rank after the project's and before the personal ones", () => {
+  const env = { XDG_CONFIG_HOME: "/cfg", HOME: "/home/x" };
+  const order = (paths: string[], dir: string) => paths.indexOf(path.join(dir, "skills"));
+  const explicit = skillSearchPaths("/repo", env, "team-config");
+  const custom = order(explicit, path.join("/repo", "team-config"));
+  assert.ok(custom > explicit.indexOf(path.join("/", ".agents", "skills")), "after every project directory");
+  assert.ok(custom < order(explicit, path.join("/cfg", "ask")), "before ~/.config/ask/skills");
+  // $ASK_CONFIG is the default, and an explicit directory replaces it.
+  assert.ok(skillSearchPaths("/repo", { ...env, ASK_CONFIG: "/shared" }).includes(path.join("/shared", "skills")));
+  assert.ok(!skillSearchPaths("/repo", { ...env, ASK_CONFIG: "/shared" }, "/mine").includes(path.join("/shared", "skills")));
+  assert.ok(!skillSearchPaths("/repo", env).some((entry) => entry.includes("team-config")));
+});

@@ -124,9 +124,9 @@ Editing a file
 
 Skills
   A skill is a directory with a SKILL.md holding reusable instructions. They are
-  looked for in $ASK_SKILLS_DIR, ./.ask/skills, ./.agents/skills,
-  ~/.config/ask/skills and ~/.claude/skills. Only SKILL.md is read; bundled
-  assets are ignored. The skill is chosen here, never by the model.
+  looked for in $ASK_SKILLS_DIR, ./.ask/skills, ./.agents/skills, a --config
+  directory's skills/, ~/.config/ask/skills and ~/.claude/skills. Only SKILL.md
+  is read; bundled assets are ignored. The skill is chosen here, never by the model.
 
 Sessions
   Interactive runs continue the previous conversation for this repository,
@@ -543,8 +543,8 @@ async function printSessions(scope: string, active: string, paint: Palette): Pro
 }
 
 /** List skills, optionally filtered, without calling the API. */
-async function printSkills(term: string, paint: Palette): Promise<void> {
-  const roots = skillSearchPaths();
+async function printSkills(term: string, paint: Palette, configDir: string | undefined): Promise<void> {
+  const roots = skillSearchPaths(process.cwd(), process.env, configDir ?? process.env["ASK_CONFIG"]);
   const all = await discoverSkills(roots);
   const shown = filterSkills(all, term);
 
@@ -574,10 +574,10 @@ async function printSkills(term: string, paint: Palette): Promise<void> {
 }
 
 /** Resolve and load every requested skill, reporting inexact matches. */
-async function gatherSkills(terms: readonly string[]): Promise<LoadedSkill[]> {
+async function gatherSkills(terms: readonly string[], configDir: string | undefined): Promise<LoadedSkill[]> {
   if (terms.length === 0) return [];
 
-  const available = await discoverSkills(skillSearchPaths());
+  const available = await discoverSkills(skillSearchPaths(process.cwd(), process.env, configDir ?? process.env["ASK_CONFIG"]));
   const loaded: LoadedSkill[] = [];
   const seen = new Set<string>();
 
@@ -727,6 +727,7 @@ async function main(argv: string[]): Promise<number> {
     await printSkills(
       positionals.join(" "),
       bool("no-color") ? NO_COLOUR : createPalette(supportsColour(process.stdout)),
+      flag("config"),
     );
     return 0;
   }
@@ -954,7 +955,7 @@ async function main(argv: string[]): Promise<number> {
 
   // Skills carry across a session like @refs do, and are re-read each turn.
   const carriedSkills = sessionSkills(session).filter((name) => !skillTerms.includes(name));
-  const skills = await gatherSkills([...carriedSkills, ...skillTerms]);
+  const skills = await gatherSkills([...carriedSkills, ...skillTerms], flag("config"));
   if (!bool("quiet") && !bool("json")) {
     for (const skill of skills) {
       const how = skill.matched === "search" ? " [search]" : "";

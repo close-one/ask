@@ -93,6 +93,7 @@ export function parseFrontMatter(text: string): FrontMatter {
  *   ./.ask/skills            then the same two in every ancestor directory,
  *   ./.agents/skills         nearest first — skills usually live at the
  *                            workspace root while you work in a sub-project
+ *   <config dir>/skills      a --config directory or $ASK_CONFIG
  *   ~/.config/ask/skills     personal
  *   ~/.claude/skills         shared with an agent harness
  *
@@ -102,6 +103,8 @@ export function parseFrontMatter(text: string): FrontMatter {
 export function skillSearchPaths(
   cwd: string = process.cwd(),
   env: NodeJS.ProcessEnv = process.env,
+  /** --config <dir>; defaults to $ASK_CONFIG. Relative to `cwd`. */
+  configDir: string | undefined = env["ASK_CONFIG"],
 ): string[] {
   const paths: string[] = [];
 
@@ -117,6 +120,8 @@ export function skillSearchPaths(
     if (parent === dir) break;
     dir = parent;
   }
+
+  if (configDir) paths.push(path.join(path.resolve(cwd, configDir), "skills"));
 
   const xdg = env["XDG_CONFIG_HOME"];
   paths.push(

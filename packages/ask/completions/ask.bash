@@ -225,7 +225,7 @@ _ask_complete() {
     --skill)
       # Skill names from the same directories the CLI searches.
       local dir names=()
-      for dir in ${ASK_SKILLS_DIR//:/ } ./.ask/skills ./.agents/skills \
+      for dir in ${ASK_SKILLS_DIR//:/ } ./.ask/skills ./.agents/skills ${ASK_CONFIG:+"$ASK_CONFIG/skills"} \
         "${XDG_CONFIG_HOME:-$HOME/.config}/ask/skills" "$HOME/.claude/skills"; do
         [ -d "$dir" ] || continue
         local entry

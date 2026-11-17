@@ -61,6 +61,7 @@ export interface ClientOptions {
   readonly organization?: string | undefined;
   readonly project?: string | undefined;
   readonly timeoutMs?: number;
+  /** SDK transport retries of the same request body; defaults to two in both UIs. */
   readonly maxRetries?: number;
   /** A TUI lifetime signal cancels an in-flight request on exit. */
   readonly signal?: AbortSignal;
@@ -75,7 +76,7 @@ export interface BuildRequestOptions {
   readonly prompt: string;
   readonly model?: string;
   readonly system?: string;
-  /** Prior turns, oldest first. Still one request: this is not a loop. */
+  /** Prior turns, oldest first. One logical completion, including transport retries. */
   readonly history?: readonly HistoryMessage[];
   readonly maxTokens?: number | undefined;
   readonly temperature?: number | undefined;
@@ -209,7 +210,9 @@ export function buildRequest({
   return request;
 }
 
-/** Send one request and return the answer. Never assumes optional fields. */
+/** Request one logical completion and return the answer. The SDK may retry the
+ * same body on transient transport failures; it never creates a follow-up turn.
+ */
 export async function askOnce(client: ChatClient, request: OneShotRequest): Promise<AskResult> {
   const completion = await client.chat.completions.create(request);
   const choice = completion.choices?.[0];

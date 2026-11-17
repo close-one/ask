@@ -78,3 +78,22 @@ test("large files are truncated and the total is capped", async (t) => {
   assert.match(renderInstructions(loaded.files), /truncated="true"/);
   assert.ok(loaded.notes.some((note) => /big\.md truncated to 64 KB/.test(note)));
 });
+
+test("instruction aliases cannot bypass secret directories or credential configuration", async (t) => {
+  const { root } = await project(t);
+  await mkdir(path.join(root, ".env.production"));
+  await writeFile(path.join(root, ".env.production", "private.md"), "PRIVATE_INSTRUCTIONS");
+  await symlink(".env.production/private.md", path.join(root, "AGENTS.md"));
+  await writeFile(path.join(root, "ask.jsonc"), '{"endpoint":{"apiKey":"PRIVATE_KEY"}}');
+  await symlink("ask.jsonc", path.join(root, "rules.md"));
+  for (const within of [root, null]) {
+    const loaded = await loadInstructions([
+      entry(path.join(root, "AGENTS.md"), { implicit: true, within }),
+      entry(path.join(root, "rules.md"), { within }),
+    ], root);
+    assert.deepEqual(loaded.files, []);
+    assert.equal(loaded.notes.length, 2);
+    assert.ok(loaded.notes.every((note) => note.includes("looks like a credentials file")));
+    assert.doesNotMatch(JSON.stringify(loaded), /PRIVATE_/);
+  }
+});

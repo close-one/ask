@@ -16,12 +16,12 @@ will *not* do.
 | Guarantee | Enforced by |
 | --- | --- |
 | No tool / function calling is ever requested | `OneShotRequest` in `src/chat.ts` is the SDK params type with `tools`, `tool_choice`, `functions`, `function_call`, `parallel_tool_calls`, `stream` removed — setting one is a compile error |
-| One completion per invocation | No model-driven execution loop; asserted in `test/chat.test.ts` |
+| One logical completion per invocation | No model-driven execution loop; SDK transport retries resend the same body, at most twice |
 | Only one SDK method is reachable | `createClient` returns a one-method `ChatClient`, not the SDK client |
 | The model cannot choose what it reads | Context comes only from `@paths` and `-f` flags you pass |
 | Nothing is written to your source tree unless you authorize it | `/write` and `/create` explicitly name targets; session storage is separate |
 | Git is the CLI's only subprocess executable | `src/git.ts` centralises hardened metadata/diff calls; fsmonitor, optional index writes, lazy fetches and configured diff/filter execution are disabled |
-| Credentials are not attached by accident | `.env*`, `*.pem`, `*.key`, `*.p12`, `id_rsa`, `credentials.json` and similar are skipped even when named explicitly, unless `--include-secrets` |
+| Credentials are not attached by accident | `.env*`, `ask.json`, `ask.jsonc`, `*.pem`, `*.key`, `*.p12`, `id_rsa`, `credentials.json` and similar are skipped even when named explicitly, unless `--include-secrets` |
 | A repository cannot choose your endpoint or key | A project's `ask.json` and `.ask/` cannot set `endpoint` or use `{env:}` until `ask /trust` records their exact contents; `.env` files are never read |
 | You can see the payload before sending | `--dry-run` prints the exact JSON body; `--show-context` lists attachments and never calls the API |
 
@@ -86,7 +86,12 @@ File and directory references are canonicalised before reading or walking them.
 A symlink that redirects outside the canonical working directory is skipped,
 including a link in a parent component or an explicitly referenced directory.
 Credential-name filtering checks both the supplied path and the canonical target.
-`--include-secrets` bypasses only that filename filter, not symlink containment.
+Common configuration files (`ask.json` and `ask.jsonc`) are credential-bearing
+by convention and use the same filter. Automatic instruction loading checks the
+full canonical path, including secret-named parent directories, and always
+excludes these credential files.
+For attachments, `--include-secrets` bypasses only that filename filter, not
+symlink containment. It does not relax automatic instruction filtering.
 Explicitly named outside paths without redirecting links remain supported.
 Directory walks continue to skip nested symlink entries.
 

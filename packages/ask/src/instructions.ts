@@ -95,7 +95,7 @@ export async function loadInstructions(entries: readonly InstructionEntry[], pro
         continue;
       }
       if (!(await stat(real)).isFile()) { notes.push(`${entry.source}: not reading ${shown}: not a regular file`); continue; }
-      if (isSecretPath(display(file, projectRoot)) || isSecretPath(path.basename(real))) {
+      if (isSecretPath(display(file, projectRoot)) || isSecretPath(real)) {
         notes.push(`${entry.source}: not reading ${shown}: looks like a credentials file`);
         continue;
       }

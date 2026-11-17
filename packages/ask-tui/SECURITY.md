@@ -16,7 +16,7 @@ applies here too. This document covers what the TUI adds.
 
 | Guarantee | Enforced by |
 | --- | --- |
-| One completion per submission | No model-driven execution loop; SDK retries are disabled; asserted in controller tests |
+| One logical completion per submission | No model-driven execution loop; SDK transport retries resend the same body, at most twice |
 | Nothing is written unless you approve it | `<update>` proposals require a diff review and `/apply` |
 | Repository runtime hooks never run | The Node launcher runs Bun by absolute path, never from the working directory or a relative `PATH` entry, with `--no-env-file` and a bundled `--config`, so repository/global `bunfig.toml` preloads are skipped |
 | A question cannot attach an unintended file | Typed mentions must name an existing path or glob (no fuzzy search); pasted text is escaped so it never contains mentions |
@@ -24,8 +24,12 @@ applies here too. This document covers what the TUI adds.
 
 ## TUI update proposals
 
-`ask-tui` uses the same tool-free request type as the CLI. It sends one completion
-per user submission, with SDK retries disabled. `<update>` blocks are response
+`ask-tui` uses the same tool-free request type and retry policy as the CLI. It
+requests one logical completion per user submission. Transient failures can
+trigger up to two SDK transport retries of the identical body, including the
+same messages and attachment snapshot. These are not new conversation turns;
+timeouts apply per attempt, and exiting cancels the request and retries.
+`<update>` blocks are response
 text, not function calls. Parsing them never performs I/O. The application does
 not feed execution results back to the model or issue automatic follow-up requests.
 The model is free to *suggest* changes; only the user can approve local writes.

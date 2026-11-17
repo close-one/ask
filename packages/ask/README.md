@@ -6,7 +6,7 @@
 
 User-driven LLM CLI in TypeScript. Attach files or whole directories as
 context, ask a question, get a single answer. **No model tools, no agent loop**
-— one completion per invocation. An interactive chat is available separately as
+— one logical completion per invocation. An interactive chat is available separately as
 [`@codehaus-au/ask-tui`](https://github.com/codehausau/ask/tree/main/packages/ask-tui).
 
 ```console
@@ -24,15 +24,21 @@ matters should be enforced in code, not policy:
 | Property | This CLI |
 | --- | --- |
 | Tool / function calling | Impossible to send: `OneShotRequest` in [`src/chat.ts`](https://github.com/codehausau/ask/blob/main/packages/ask/src/chat.ts) is the SDK's params type with `tools`, `tool_choice`, `functions`, `function_call`, `parallel_tool_calls`, `stream` **removed**, so setting one is a compile error |
-| Model turns | One completion per invocation; no automatic tool-result or follow-up requests |
+| Model turns | One logical completion per invocation; no automatic tool-result or follow-up requests |
 | SDK surface used | One method; `createClient` returns a 1-method `ChatClient`, not the whole SDK client |
 | Model-driven file access | None — the model only sees paths **you** name with `@` |
 | Writes to your filesystem | Only with explicit `/write` or `/create`, after [checks that fail closed](#editing-a-file). No model-triggered writes |
-| Network calls | One, to the endpoint you configure |
+| Network calls | One completion request to your endpoint, with up to two SDK transport retries |
 | Runtime dependencies | Two: `openai` (the official SDK) and `marked` (markdown parsing, itself dependency-free) |
 
 Everything the model receives can be printed before sending: `--dry-run` (exact
 JSON body) or `--show-context` (attachment list + token estimate, no API call).
+
+The CLI and TUI share the same retry policy: connection errors, timeouts,
+HTTP 408/409/429 and server errors can trigger up to two retries (three HTTP
+attempts total). Retries resend the identical request body, including messages,
+attachments and model settings. They do not reload files or add conversation
+turns. `--timeout` applies per attempt, so retries can extend total elapsed time.
 
 ## Interactive chat TUI
 
@@ -164,7 +170,12 @@ user owns, is not read, and that is always reported. Wrong types are errors that
 name the file and setting; unknown settings are reported and ignored. If a layer
 changes `endpoint.url` without setting `apiKey`, a lower layer's key is not
 reused, so a key never follows a URL chosen somewhere else (`--base-url` on the
-command line is the exception: it keeps the effective key).
+command line is the exception: it keeps the effective key). Resetting the URL
+with `null` also drops foreign credentials when returning to the default OpenAI
+endpoint. `ask.json` and `ask.jsonc` are treated as credential files and excluded
+from attachments and automatic instructions, including through symlinks. The
+CLI's `--include-secrets` explicitly permits attaching them; it does not change
+automatic instruction filtering.
 
 **`.env` files are never read.** A project's `.env` belongs to that project, and
 earlier versions reading it could pick up another account's key. If a
@@ -495,7 +506,7 @@ when Git cannot verify the undo copy.
 | `--diff <path>` / `/diff <path>` | show the proposed change, write nothing |
 | `--force` | allow `--write` on a dirty or untracked file, and bypass the size check |
 | `--all-matches` | attach every search match instead of the single best one |
-| `--include-secrets` | stop skipping `.env`, `*.pem`, key-ish files |
+| `--include-secrets` | stop skipping `.env`, `ask.json(c)`, `*.pem`, key-ish files |
 | `--show-context` | list attachments and exit |
 | `--dry-run` | print the request JSON and exit |
 | `--json` | machine-readable result (text, usage, attachments) |
@@ -919,7 +930,7 @@ from turn 2 onward the running thread total:
 (`2/3 turns`) when some did not — a partial total is never passed off as complete.
 
 `--new` / `--reset`, `--show-session` and `--no-session` are flag aliases for
-scripting. It is still **one request per invocation** — a session only decides
+scripting. It is still **one logical completion per invocation** — a session only decides
 what goes into that request. No tools, no loop.
 
 ### The rules, and why
@@ -951,7 +962,7 @@ $ ask /compact
 -- 2 file(s) stay attached; previous thread kept at .../sessions/<id>.pre-compact.json
 ```
 
-- **Still one request per invocation.** `/compact` *is* the request; nothing is
+- **Still one logical completion per invocation.** `/compact` *is* the request; nothing is
   ever summarised behind your back during a normal question. That is why it is
   an explicit verb rather than something pruning does automatically.
 - **Files stay attached** — every ref from the compacted turns carries over, and
@@ -1014,7 +1025,7 @@ Walks are sorted and filtered so a `@src` reference stays cheap and predictable:
 - **skipped dirs**: `.git`, `node_modules`, `dist`, `build`, `target`,
   `coverage`, `.next`, `.gradle`, `.venv`, `__pycache__`, `.terraform`, …
 - **skipped files**: binary extensions, files containing NUL bytes, lockfiles
-- **skipped credentials**: `.env*`, `*.pem`, `*.key`, `*.p12`, `id_rsa`,
+- **skipped credentials**: `.env*`, `ask.json`, `ask.jsonc`, `*.pem`, `*.key`, `*.p12`, `id_rsa`,
   `credentials.json`, … — even when named explicitly, unless `--include-secrets`
 - **symlinks**: exact, glob and search results are canonicalised before use.
   Aliases that redirect outside the working directory are skipped, including

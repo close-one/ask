@@ -33,6 +33,15 @@ def main():
         def do_POST(self):
             request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             requests.append(request)
+            if len(requests) <= 2:
+                response = b'{"error":{"message":"Retry this transient failure"}}'
+                self.send_response(503)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(response)))
+                self.send_header("retry-after-ms", "1")
+                self.end_headers()
+                self.wfile.write(response)
+                return
             response = json.dumps({
                 "id": "package-smoke", "object": "chat.completion", "created": 0, "model": "smoke",
                 "choices": [{"index": 0, "finish_reason": "stop", "message": {
@@ -71,6 +80,11 @@ def main():
         (config / "ask").mkdir(parents=True)
         (config / "ask" / "ask.json").write_text('{ "system": "config-system-marker" }')
         (config / "ask" / "ask.json").chmod(0o600)
+        # Simulate a theme saved in another project, whose palette is unavailable
+        # here. Startup must recover without overwriting the saved preference.
+        saved = config / "ask" / "tui.json"
+        saved.write_text('{ "theme": "project-only" }')
+        saved.chmod(0o600)
         env["ASK_STATE_DIR"] = str(Path(directory) / "state")
         env["XDG_CONFIG_HOME"] = str(config)
         (cwd / ".env").write_text("ASK_SYSTEM=repository-system-marker\nOPENAI_API_KEY=repository-key\n")
@@ -102,6 +116,8 @@ def main():
             os.close(slave)
             slave = None
             wait_for(lambda: b"Ready" in output, "native renderer startup")
+            wait_for(lambda: b"using ask" in output, "unavailable saved theme fallback notice")
+            assert json.loads(saved.read_text())["theme"] == "project-only"
             # Trailing question text keeps the @ picker closed when Enter submits.
             os.write(master, b"Update @sample.ts please\r")
             wait_for(lambda: b"/review to inspect" in output, "completion and proposal summary")
@@ -110,7 +126,8 @@ def main():
             wait_for(lambda: b"+const x = 2;" in output, "diff review")
             os.write(master, b"/apply\r")
             wait_for(lambda: target.read_text() == "const x = 2;\n", "approved write")
-            assert len(requests) == 1, "local approval issued another model request"
+            assert len(requests) == 3, "expected two transport retries, without local approval making another request"
+            assert requests[0] == requests[1] == requests[2], "retry changed the request body"
             assert "const x = 1;" in requests[0]["messages"][-1]["content"]
             system = requests[0]["messages"][0]["content"]
             assert "config-system-marker" in system, "config file was not applied"
@@ -122,7 +139,6 @@ def main():
             os.write(master, b"/theme nord")
             wait_for(lambda: b"nord" in output, "theme picker")
             os.write(master, b"\r")
-            saved = config / "ask" / "tui.json"
             wait_for(lambda: saved.exists() and json.loads(saved.read_text()).get("theme") == "nord", "saved theme")
             assert (saved.stat().st_mode & 0o777) == 0o600, oct(saved.stat().st_mode)
             os.write(master, b"/quit\r")
@@ -143,7 +159,7 @@ def main():
             server.shutdown()
             server.server_close()
             thread.join(timeout=5)
-    print("Installed TUI: native startup, one completion, reviewed apply, safe config, saved theme and clean exit passed")
+    print("Installed TUI: native startup, identical-body retries, reviewed apply, safe config, saved-theme fallback and clean exit passed")
 
 
 if __name__ == "__main__":

@@ -69,6 +69,9 @@ export const LOCKFILES: ReadonlySet<string> = new Set([
 /** Files that usually hold credentials. Skipped unless explicitly allowed. */
 const SECRET_PATTERNS: readonly RegExp[] = [
   /(^|[/\\])\.env(\.|$)/i,
+  // Common configuration can contain literal endpoint credentials. Like .env,
+  // skip it by convention rather than trying to parse/redact partial JSON(C).
+  /(^|[/\\])ask\.jsonc?$/i,
   /(^|[/\\])(id_rsa|id_dsa|id_ecdsa|id_ed25519)$/,
   /\.(pem|key|p12|pfx|jks|ppk)$/i,
   /(^|[/\\])(credentials|secrets?)\.(json|ya?ml|toml|ini)$/i,

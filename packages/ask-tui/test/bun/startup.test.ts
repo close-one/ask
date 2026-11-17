@@ -96,9 +96,9 @@ test("tui.json layers apply to startup: global, --config, ASK_THEME, then the fl
       if (/^(ASK_|OPENAI_|BUN_)/.test(key) && key !== "ASK_STATE_DIR") delete env[key];
     }
     const entry = new URL("../../src/index.ts", import.meta.url).href;
-    // An unknown theme stops startup and names its value, proving which layer won.
+    // A missing saved default falls back; explicit choices still report errors.
     for (const { args, exported, expected } of [
-      { args: [], exported: undefined, expected: /Unknown theme: global-theme/ },
+      { args: [], exported: undefined, expected: /no API key/ },
       { args: ["--config", "custom"], exported: undefined, expected: /Unknown theme: custom-theme/ },
       { args: ["--config", "custom"], exported: "exported-theme", expected: /Unknown theme: exported-theme/ },
       { args: ["--config", "custom", "--theme", "flag-theme"], exported: "exported-theme", expected: /Unknown theme: flag-theme/ },

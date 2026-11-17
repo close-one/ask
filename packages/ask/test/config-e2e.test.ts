@@ -59,6 +59,12 @@ for (const layout of ["src", "dist/src"]) {
     assert.doesNotMatch(`${stdout}${stderr}`, /private-|repository-/);
     assert.equal((await runCli(entry, ["--quiet", "--dry-run", "hello"], cwd, env)).stderr, "");
 
+    await writeFile(path.join(cwd, "sample.ts"), "const safe = true;");
+    await symlink("ask.json", path.join(cwd, "config-alias.txt"));
+    const folder = await runCli(entry, ["--dry-run", "@. review this project"], cwd, env);
+    assert.match(folder.stdout, /const safe = true/);
+    assert.doesNotMatch(folder.stdout, /private-project-key|private-repository-key/);
+
     // AGENTS.md from the config directory, then the project root, after the system prompt.
     await writeFile(path.join(xdg, "ask", "AGENTS.md"), "personal-rules");
     await writeFile(path.join(cwd, "AGENTS.md"), "project-rules");

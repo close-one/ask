@@ -70,8 +70,8 @@ test("a partial path is not searched, only prefix-completed", async () => {
 
 test("flags complete on a leading dash", async () => {
   const cwd = await fixture();
-  assert.deepEqual(await complete(cwd, 1, "ask", "--sh"), ["--show-context", "--show-session"]);
-  assert.deepEqual(await complete(cwd, 1, "ask", "--show-c"), ["--show-context"]);
+  assert.deepEqual(await complete(cwd, 1, "ask", "--sh"), ["--show-config", "--show-context", "--show-session"]);
+  assert.deepEqual(await complete(cwd, 1, "ask", "--show-c"), ["--show-config", "--show-context"]);
   assert.deepEqual(await complete(cwd, 1, "ask", "--max-t"), ["--max-tokens", "--max-total-bytes"]);
   assert.deepEqual(await complete(cwd, 1, "ask", "--dr"), ["--dry-run"]);
 });
@@ -80,6 +80,7 @@ test("/verbs complete as the first word only", async () => {
   const cwd = await fixture();
   assert.deepEqual(await complete(cwd, 1, "ask", "/"), [
     "/compact",
+    "/config",
     "/create",
     "/diff",
     "/new",
@@ -88,9 +89,11 @@ test("/verbs complete as the first word only", async () => {
     "/sessions",
     "/skills",
     "/switch",
+    "/trust",
+    "/untrust",
     "/write",
   ]);
-  assert.deepEqual(await complete(cwd, 1, "ask", "/c"), ["/compact", "/create"]);
+  assert.deepEqual(await complete(cwd, 1, "ask", "/c"), ["/compact", "/config", "/create"]);
   assert.deepEqual(await complete(cwd, 1, "ask", "/cr"), ["/create"]);
   assert.deepEqual(await complete(cwd, 1, "ask", "/w"), ["/write"]);
   assert.deepEqual(await complete(cwd, 1, "ask", "/d"), ["/diff"]);
@@ -106,6 +109,7 @@ test("an empty first word lists the verbs, so they are discoverable", async () =
   const cwd = await fixture();
   assert.deepEqual(await complete(cwd, 1, "ask", ""), [
     "/compact",
+    "/config",
     "/create",
     "/diff",
     "/new",
@@ -114,6 +118,8 @@ test("an empty first word lists the verbs, so they are discoverable", async () =
     "/sessions",
     "/skills",
     "/switch",
+    "/trust",
+    "/untrust",
     "/write",
   ]);
   // Mid-question, TAB stays silent rather than suggesting verbs.

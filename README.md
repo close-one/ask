@@ -9,8 +9,13 @@ context, ask a question, get an answer. **No model tools, no agent loop.**
 
 | Package | What it is | Docs |
 | --- | --- | --- |
-| [`@codehaus-au/ask`](https://www.npmjs.com/package/@codehaus-au/ask) | One-shot CLI: one request per invocation. Node 20+, two runtime dependencies | [`packages/ask`](packages/ask/README.md) · [security](packages/ask/SECURITY.md) |
-| [`@codehaus-au/ask-tui`](https://www.npmjs.com/package/@codehaus-au/ask-tui) | Interactive OpenTUI chat: one request per message, reviewed edits. Needs Bun 1.3.14+ | [`packages/ask-tui`](packages/ask-tui/README.md) · [security](packages/ask-tui/SECURITY.md) |
+| [`@codehaus-au/ask`](https://www.npmjs.com/package/@codehaus-au/ask) | One-shot CLI: one logical completion per invocation. Node 20+, two runtime dependencies | [`packages/ask`](packages/ask/README.md) · [security](packages/ask/SECURITY.md) |
+| [`@codehaus-au/ask-tui`](https://www.npmjs.com/package/@codehaus-au/ask-tui) | Interactive OpenTUI chat: one logical completion per message, reviewed edits. Needs Bun 1.3.14+ | [`packages/ask-tui`](packages/ask-tui/README.md) · [security](packages/ask-tui/SECURITY.md) |
+
+Both interfaces allow up to two SDK transport retries after transient failures
+(at most three HTTP attempts). Retries resend the same request body; they do not
+add messages, reload attachments, or create model-driven follow-ups. Timeouts
+apply per attempt, so total elapsed time can be longer.
 
 ```bash
 npm install --global @codehaus-au/ask        # the CLI

@@ -647,7 +647,11 @@ function merge(target: Plain, layer: Plain, label: string, sources: Map<string, 
 function pairEndpoint(target: Plain, layer: Plain, label: string, sources: Map<string, string>, notes: string[]): void {
   const next = isPlain(layer["endpoint"]) ? layer["endpoint"] : null;
   const current = isPlain(target["endpoint"]) ? target["endpoint"] : null;
-  if (!next || typeof next["url"] !== "string" || !current || next["url"] === current["url"]) return;
+  if (!next || !Object.hasOwn(next, "url") || !current) return;
+  // null removes the URL, returning to the SDK's default destination. That is
+  // still an endpoint change and must not carry another provider's credentials.
+  const destination = (url: unknown) => url ?? "https://api.openai.com/v1";
+  if (destination(next["url"]) === destination(current["url"])) return;
   for (const key of ["apiKey", "organization", "project"]) {
     if (next[key] !== undefined || current[key] === undefined) continue;
     notes.push(`${label} changes endpoint.url, so endpoint.${key} from ${sources.get(`endpoint.${key}`)} is not used; set endpoint.${key} in the same place`);

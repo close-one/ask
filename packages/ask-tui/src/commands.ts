@@ -3,7 +3,8 @@ import type { ManagerMode } from "./completion.ts";
 
 export const TUI_HELP = `Chat: mention @files or @folders anywhere; quote paths with spaces.
 Typed mentions must name an existing path or glob; use the @ menu to search. Type \\@ for a literal @.
-Pasted text is never read as a mention. Each submission makes one request; no model tools.
+Pasted text is never read as a mention. Each submission makes one logical completion; no model tools.
+Transient failures may retry the same request up to twice, without model-driven follow-ups.
 /review [path...]  show pending diffs    /apply [path...]  write reviewed files
 /reject [path...]  discard proposals     (no paths = every pending file)
 /context  manage context    /detach [path]  remove a reference or file

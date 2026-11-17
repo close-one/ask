@@ -175,6 +175,28 @@ test("files are validated: types, unknown keys, misplaced sections, duplicates a
   }
 });
 
+test("resetting the endpoint URL drops foreign credentials, but not credentials for the default destination", async (t) => {
+  const { global, custom, project, env, write } = await sandbox(t);
+  const credentials = { apiKey: "provider-key", organization: "provider-org", project: "provider-project" };
+  await write(path.join(global, "ask.json"), { endpoint: { url: "https://provider.test/v1", ...credentials } });
+  await write(path.join(custom, "ask.json"), { endpoint: { url: null } });
+  const reset = await loadSettings({ cwd: project, env, configDir: custom });
+  assert.deepEqual(reset.settings.endpoint, {}, "default OpenAI requests cannot inherit another provider's credentials");
+  for (const key of Object.keys(credentials)) {
+    assert.equal(reset.sources.has(`endpoint.${key}`), false);
+    assert.ok(reset.notes.some((note) => note.includes(`endpoint.${key} from global ask.json is not used`)));
+  }
+  await write(path.join(custom, "ask.json"), { endpoint: { url: null, apiKey: "explicit-default-key" } });
+  assert.deepEqual((await loadSettings({ cwd: project, env, configDir: custom })).settings.endpoint, { apiKey: "explicit-default-key" });
+  await write(path.join(custom, "ask.json"), { endpoint: { url: null } });
+  await write(path.join(global, "ask.json"), { endpoint: { url: "https://api.openai.com/v1", ...credentials } });
+  assert.deepEqual((await loadSettings({ cwd: project, env, configDir: custom })).settings.endpoint, credentials);
+  await write(path.join(global, "ask.json"), { endpoint: credentials });
+  await write(path.join(custom, "ask.json"), { endpoint: { url: "https://api.openai.com/v1" } });
+  assert.deepEqual((await loadSettings({ cwd: project, env, configDir: custom })).settings.endpoint,
+    { url: "https://api.openai.com/v1", ...credentials });
+});
+
 test("ASK_* variables are typed and validated; flags report their own names", async (t) => {
   const { project, env } = await sandbox(t);
   const loaded = await loadSettings({ cwd: project, env: { ...env, ASK_TIMEOUT: "1.5", ASK_NEXT: "0", ASK_CONTEXT_WINDOW: "32768" } });

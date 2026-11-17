@@ -138,7 +138,7 @@ test("empty prompt is rejected before any request", () => {
   assert.throws(() => buildRequest({ prompt: "   " }), /empty prompt/);
 });
 
-test("askOnce issues exactly one request and returns the answer", async () => {
+test("askOnce calls the completion method once and returns the answer", async () => {
   const { client, capture } = stubClient({
     model: "gpt-4o-mini-2024",
     choices: [
@@ -154,7 +154,7 @@ test("askOnce issues exactly one request and returns the answer", async () => {
 
   const result = await askOnce(client, buildRequest({ prompt: "p", model: "gpt-4o-mini" }));
 
-  assert.equal(capture.count, 1, "exactly one API call — no agent loop");
+  assert.equal(capture.count, 1, "exactly one SDK method call — no agent loop");
   assert.equal(result.text, "looks fine");
   assert.equal(result.model, "gpt-4o-mini-2024");
   assert.equal(result.finishReason, "stop");

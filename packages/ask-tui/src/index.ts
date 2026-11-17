@@ -29,7 +29,8 @@ endpoint or key, or use {env:VAR}, until you run: ask /trust
 --show-config prints each setting and where it came from.
 AGENTS.md from each config directory and the project root, plus configured
 instructions files, are added to the system prompt; --no-instructions skips them.
-One request per submission; no model tools, automatic retries or agent loop.
+One logical completion per submission; no model tools or agent loop.
+Up to two SDK retries resend the same request body after transient failures.
 Mention @files or @folders anywhere. Suggested updates require review and /apply.
 History is in memory for this TUI only. Ctrl+C copies a selection, otherwise exits.
 Ctrl+D always exits. /help lists commands.
@@ -39,7 +40,7 @@ Ctrl+D always exits. /help lists commands.
 It is never looked up. When set, the oldest history is dropped so each estimated
 request fits, and a message too large even without history is refused before
 sending. Without it, resent history is capped at about 32000 tokens.
---timeout (ASK_TIMEOUT, timeout): default 120 seconds per request, no retries.
+--timeout (ASK_TIMEOUT, timeout): default 120 seconds per attempt; retries can extend total time.
 --theme (ASK_THEME, tui.theme): default ask. Use /theme to preview and change themes.
 Custom themes: themes/<name>.json(c) in any config directory, with colour roles
 (background, panel, accent, text, muted, heading, summary, border, code, warning,
@@ -103,12 +104,20 @@ async function main() {
   const model = settings.model ?? DEFAULT_MODEL;
   const timeoutMs = settings.timeout === undefined ? DEFAULT_RESPONSE_TIMEOUT_MS : timeoutSecondsToMs(settings.timeout);
   const customThemes = await loadCustomThemes(loaded.directories);
-  const theme = settings.tui.theme ?? "ask";
+  let theme = settings.tui.theme ?? "ask";
+  let themeNotice: string | undefined;
   try {
     themeModes(theme); // Validate before creating a client or loading the native UI.
   } catch (error) {
-    // A broken custom theme file explains why its name is unknown.
-    throw new Error([error instanceof Error ? error.message : String(error), ...customThemes.notes].join("\n"));
+    if (/^global tui\.jsonc?$/.test(loaded.sources.get("tui.theme") ?? "")) {
+      // A saved project/--config theme may not exist in this directory. Keep the
+      // saved preference for when it is available, but let this session start.
+      themeNotice = `Saved theme ${terminalField(theme)} is unavailable here; using ask. Choose another with /theme.`;
+      theme = "ask";
+    } else {
+      // Explicit choices still fail, with any broken custom file's diagnostic.
+      throw new Error([error instanceof Error ? error.message : String(error), ...customThemes.notes].join("\n"));
+    }
   }
   const apiKey = settings.endpoint.apiKey;
   if (!apiKey && !isLoopbackEndpoint(baseURL)) {
@@ -127,7 +136,7 @@ async function main() {
   const lifetime = new AbortController();
   const chat = new TuiChat(createClient({
     apiKey, baseURL, organization: settings.endpoint.organization, project: settings.endpoint.project,
-    timeoutMs, maxRetries: 0, signal: lifetime.signal,
+    timeoutMs, signal: lifetime.signal,
   }), {
     cwd, model, baseURL, system: settings.system ?? "",
     maxTokens: settings.maxTokens, temperature: settings.temperature,
@@ -149,6 +158,7 @@ async function main() {
   try {
     // Shown in the transcript: stderr would be drawn over (or under) the UI.
     const notices = [...loaded.notes, ...customThemes.notes, ...startupInstructions.notes].map((note) => note.charAt(0).toUpperCase() + note.slice(1));
+    if (themeNotice) notices.push(themeNotice);
     if (startupInstructions.files.length) {
       notices.push(`Instructions: ${startupInstructions.files.map((file) => terminalField(file.display)).join(", ")}`);
     }

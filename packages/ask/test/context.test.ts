@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -62,6 +62,25 @@ test("single file reference is attached", async () => {
     ["src/a.ts"],
   );
   assert.equal(result.blocks[0]?.text, "export const a = 1;\n");
+});
+
+test("credential config is excluded from folder, explicit and aliased attachments unless opted in", async (t) => {
+  const cwd = await mkdtemp(path.join(tmpdir(), "ask-config-context-"));
+  t.after(() => rm(cwd, { recursive: true, force: true }));
+  await writeFile(path.join(cwd, "code.ts"), "const safe = true;");
+  for (const name of ["ask.json", "ask.jsonc"]) {
+    await writeFile(path.join(cwd, name), '{"endpoint":{"apiKey":"PRIVATE_KEY"}}');
+  }
+  await symlink("ask.json", path.join(cwd, "alias.txt"));
+  const folder = await collectContext(["."], { cwd });
+  assert.deepEqual(folder.blocks.map((block) => block.path), ["code.ts"]);
+  for (const name of ["ask.json", "ask.jsonc", "alias.txt"]) {
+    const refused = await collectContext([name], { cwd });
+    assert.deepEqual(refused.blocks, []);
+    assert.equal(refused.skipped[0]?.reason, "looks-like-secret");
+    const explicit = await collectContext([name], { cwd, includeSecrets: true });
+    assert.match(explicit.blocks[0]!.text, /PRIVATE_KEY/);
+  }
 });
 
 test("directory reference walks deterministically and applies skip rules", async () => {

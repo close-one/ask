@@ -833,7 +833,7 @@ async function main(argv: string[]): Promise<number> {
     return 0;
   }
 
-  // /compact: one invocation, one request, whose answer becomes the new
+  // /compact: one invocation, one logical completion, whose answer becomes the new
   // history. Deliberately explicit — nothing is ever summarised behind your
   // back during a normal question.
   if (bool("compact")) {

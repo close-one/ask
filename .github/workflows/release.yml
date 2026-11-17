@@ -83,6 +83,7 @@ jobs:
         if: steps.select.outputs.package == 'ask-tui'
         with:
           bun-version: 1.4.4
+          no-cache: true
 
       - run: pnpm install --frozen-lockfile
 

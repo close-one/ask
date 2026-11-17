@@ -2,7 +2,7 @@
 
 Interactive terminal chat for [`ask`](../ask/README.md), built on
 [OpenTUI](https://github.com/sst/opentui). Attach files with `@`, ask a question,
-and get one completion per message. **No model tools, no agent loop.** Suggested
+and get one logical completion per message. **No model tools, no agent loop.** Suggested
 edits to attached files only become writes after you review a diff and `/apply`.
 
 `ask-tui` is published separately from `@codehaus-au/ask` so the CLI keeps its
@@ -230,8 +230,11 @@ not previewing) sets `theme` in your global `~/.config/ask/tui.json` (or
 your comments and other settings are kept. A project or `--config` file is never
 written. If `ASK_THEME`, `--theme` or a project's `tui.json` also sets a theme,
 that still wins next time, and the transcript says so. If saving fails, the
-theme still applies for the current run. Automatic light/dark detection is not
-supported yet.
+theme still applies for the current run. If the globally saved theme is unavailable
+(for example, its palette lives in another project's `.ask/themes/`), startup uses
+`ask` and shows a notice. The saved name is kept for directories where it is
+available. Explicit unknown themes from a flag, environment variable, project or
+`--config` remain errors. Automatic light/dark detection is not supported yet.
 
 #### Custom themes
 
@@ -329,9 +332,12 @@ export ASK_TIMEOUT=300
 
 The flag overrides the environment variable; the default is 120 seconds per
 request attempt. Positive fractional seconds are supported (millisecond
-precision). It can also be set as `timeout` in `ask.json`. Retry
-behavior is unchanged: the TUI never retries automatically; the Node CLI allows
-up to two SDK retries, so total elapsed time can exceed the timeout.
+precision). It can also be set as `timeout` in `ask.json`. Both interfaces allow
+up to two SDK retries (three HTTP attempts total) for connection errors, timeouts,
+HTTP 408/409/429 and server errors. Each retry resends the same request body,
+including messages, attachments and model settings. It does not reread files,
+append messages, or start a model-driven follow-up. Total elapsed time can exceed
+the per-attempt timeout. Exiting the TUI cancels the active request and its retries.
 
 For example:
 
@@ -410,15 +416,17 @@ Safety rules:
 
 This initial TUI supports updates to existing files only. Use `ask /create` for
 new files. It has **in-memory history only** (separate from CLI sessions), no
-compaction, no streaming, no model tools, and no automatic retries. Use `/new` to clear history, attachments, skills and pending edits, and
+compaction, no streaming, no model tools, and no model-driven follow-ups. Use `/new` to clear history, attachments, skills and pending edits, and
 destroy the visible transcript and its native renderables. Theme and sidebar
 width remain selected for the current run. `/context`
 opens the context manager; `/help` lists commands; `/quit` or Ctrl+D exits.
 Ctrl+C exits only when no text is selected; otherwise it copies the selection.
-Each request resends the conversation history. When it no longer fits (see
+Each submission resends the conversation history. When it no longer fits (see
 `--context-window` above), the oldest messages are dropped first, with a notice,
 and history always restarts at a question. Attached files are re-read and sent in
-full every time; they are never trimmed.
+full on each new submission; they are never trimmed. SDK retries reuse that
+submission's snapshot. Credential files, including `ask.json` and `ask.jsonc`,
+are excluded from attachments and automatic instructions, including symlink aliases.
 
 ### Skills in the TUI
 

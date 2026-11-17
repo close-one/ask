@@ -104,7 +104,7 @@ export function mountChatUI(renderer: CliRenderer, chat: TuiChat, model: string,
       if (state.alive) {
         addText(error instanceof Error ? error.message : String(error), "#fda4af");
         if (error instanceof SkillResolutionError && error.candidates.length) addText(error.candidates.map(terminalField).join("\n"), "#fcd34d");
-        status.content = "Failed · no automatic retry · your draft has been restored";
+        status.content = "Failed · your draft has been restored";
         if (!input.plainText) { input.setText(text); input.gotoBufferEnd(); }
       }
     } finally {

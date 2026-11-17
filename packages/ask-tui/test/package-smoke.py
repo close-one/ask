@@ -118,6 +118,13 @@ def main():
             assert not (cwd / "preload-executed").exists(), "repository preload executed"
             # Wait for the local write to finish updating the UI before quitting.
             wait_for(lambda: b"Applied updates" in output, "write confirmation")
+            # Choosing a theme saves it, writing only the user's global tui.json.
+            os.write(master, b"/theme nord")
+            wait_for(lambda: b"nord" in output, "theme picker")
+            os.write(master, b"\r")
+            saved = config / "ask" / "tui.json"
+            wait_for(lambda: saved.exists() and json.loads(saved.read_text()).get("theme") == "nord", "saved theme")
+            assert (saved.stat().st_mode & 0o777) == 0o600, oct(saved.stat().st_mode)
             os.write(master, b"/quit\r")
             wait_for(lambda: process.poll() is not None, "clean exit")
             assert process.returncode == 0, process.returncode
@@ -136,7 +143,7 @@ def main():
             server.shutdown()
             server.server_close()
             thread.join(timeout=5)
-    print("Installed TUI: native startup, one completion, reviewed apply, safe config and clean exit passed")
+    print("Installed TUI: native startup, one completion, reviewed apply, safe config, saved theme and clean exit passed")
 
 
 if __name__ == "__main__":

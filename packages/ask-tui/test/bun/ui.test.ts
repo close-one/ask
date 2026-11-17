@@ -778,6 +778,45 @@ test("configured startup theme applies immediately and is restored after cancell
   } finally { await setup.dispose(); }
 });
 
+test("a confirmed theme choice is saved as the default; previews and cancels are not", async () => {
+  const setup = await createTestRenderer({ width: 150, height: 40, kittyKeyboard: true });
+  try {
+    const client: ChatClient = { chat: { completions: { async create() { throw new Error("saving must not ask the model"); } } } };
+    const saved: string[] = [];
+    let fail = false;
+    const ui = mountChatUI(setup.renderer, new TuiChat(client, { cwd: tmpdir() }), "test", {
+      saveTheme: async (name) => {
+        if (fail) throw new Error("not writing tui.json: writable by every user");
+        saved.push(name);
+        return { file: "~/.config/ask/tui.json", warning: name === "github" ? "Saved, but env ASK_THEME also sets the theme and takes precedence next time." : undefined };
+      },
+    });
+    const flush = async () => { for (let i = 0; i < 3; i++) { await new Promise((done) => setTimeout(done, 5)); await setup.flush(); } };
+    ui.input.setText("/theme "); ui.input.gotoBufferEnd(); await setup.flush();
+    setup.mockInput.pressArrow("down"); await setup.flush();
+    setup.mockInput.pressEscape(); await flush();
+    assert.deepEqual(saved, [], "previewing and cancelling never saves");
+
+    ui.input.setText("/theme nord"); ui.input.gotoBufferEnd(); await setup.flush();
+    setup.mockInput.pressEnter(); await flush();
+    assert.deepEqual(ui.theme, { name: "nord", mode: "dark" });
+    assert.deepEqual(saved, ["nord"]);
+    assert.match(setup.captureCharFrame(), /Theme: nord · dark · saved to ~\/\.config\/ask\/tui\.json/);
+
+    ui.input.setText("/theme github"); ui.input.gotoBufferEnd(); await setup.flush();
+    setup.mockInput.pressTab(); await flush();
+    assert.deepEqual(saved, ["nord", "github"]);
+    assert.match(setup.captureCharFrame(), /ASK_THEME also sets the theme and takes precedence/);
+
+    fail = true;
+    ui.input.setText("/theme dracula"); ui.input.gotoBufferEnd(); await setup.flush();
+    setup.mockInput.pressEnter(); await flush();
+    assert.deepEqual(ui.theme, { name: "dracula", mode: "dark" }, "the theme still applies for this run");
+    assert.match(setup.captureCharFrame(), /Theme not saved: not writing tui\.json/);
+    assert.match(setup.captureCharFrame(), /Theme: dracula · dark \(this run only\)/);
+  } finally { await setup.dispose(); }
+});
+
 test("theme choices preview on navigation and filtering, restore on cancel and commit on selection", async () => {
   const setup = await createTestRenderer({ width: 150, height: 40, kittyKeyboard: true });
   try {

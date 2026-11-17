@@ -18,6 +18,8 @@ export interface SpinnerOptions {
   readonly stream?: SpinnerStream;
   /** Overrides the terminal and environment checks. */
   readonly enabled?: boolean;
+  /** The configured `spinner` setting: off never animates, ascii forces ASCII frames. */
+  readonly mode?: "auto" | "off" | "ascii";
   readonly intervalMs?: number;
   readonly frames?: readonly string[];
   readonly now?: () => number;
@@ -79,13 +81,13 @@ export function renderFrame(
 export function startSpinner(options: SpinnerOptions): Spinner {
   const env = options.env ?? process.env;
   const stream = options.stream;
-  const animating = options.enabled ?? shouldAnimate(stream, env);
+  const animating = options.mode === "off" ? false : options.enabled ?? shouldAnimate(stream, env);
 
   if (!animating || !stream) {
     return { tick: () => {}, stop: () => {}, animating: false };
   }
 
-  const frames = options.frames ?? pickFrames(env);
+  const frames = options.frames ?? (options.mode === "ascii" ? ASCII : pickFrames(env));
   const now = options.now ?? Date.now;
   const started = now();
   let index = 0;

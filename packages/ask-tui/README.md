@@ -201,8 +201,7 @@ pnpm tui --theme high-contrast-light
 
 `--theme` overrides `ASK_THEME`; without either, the theme is `ask`. Unknown
 names are rejected before starting the UI; an empty value means "not set". Set `ASK_THEME` in your shell
-or as `theme` in `tui.json`. `/theme` can override the
-starting theme for the rest of the current run without changing the environment.
+or as `theme` in `tui.json`. `/theme` changes the theme straight away and saves your choice (see below).
 
 Run `/theme` to open a searchable theme picker. Type a name
 (for example `/theme dracula` or `/theme high-contrast-light`).
@@ -225,8 +224,14 @@ source revision and license.
 
 Changes recolor existing messages, inline Markdown, message/input backgrounds,
 dividers, popups, footer and sidebar, as well as future messages. The choice lasts
-for the current TUI run, survives `/new`, and is not saved to disk. Automatic
-light/dark detection is not supported yet.
+across `/new`, and **is saved as your default**: confirming a theme (Enter or Tab,
+not previewing) sets `theme` in your global `~/.config/ask/tui.json` (or
+`tui.jsonc`), creating the file if needed (owner-only). Only that value changes;
+your comments and other settings are kept. A project or `--config` file is never
+written. If `ASK_THEME`, `--theme` or a project's `tui.json` also sets a theme,
+that still wins next time, and the transcript says so. If saving fails, the
+theme still applies for the current run. Automatic light/dark detection is not
+supported yet.
 
 #### Custom themes
 

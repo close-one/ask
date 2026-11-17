@@ -17,6 +17,8 @@ const EXPECTED: Record<Kind, Record<string, unknown>> = {
   stringArray: { type: ["array", "null"], items: { type: "string" } },
   boolean: { type: ["boolean", "null"] },
   positiveInteger: { type: ["integer", "null"], minimum: 1 },
+  nonNegativeNumber: { type: ["number", "null"], minimum: 0 },
+  spinner: { enum: ["auto", "off", "ascii", null] },
   temperature: { type: ["number", "null"], minimum: 0, maximum: 2 },
   timeout: { type: ["number", "null"], exclusiveMinimum: 0, maximum: 2147483.647 },
 };

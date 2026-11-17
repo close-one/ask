@@ -282,15 +282,6 @@ function numberOption(raw: string | undefined, name: string): number | undefined
   return value;
 }
 
-/** Idle timeout for implicit sessions; `ASK_SESSION_TTL` is in minutes. */
-function sessionTtlMs(env: NodeJS.ProcessEnv = process.env): number {
-  const raw = env["ASK_SESSION_TTL"];
-  if (raw === undefined) return DEFAULT_SESSION_TTL_MS;
-  const minutes = Number(raw);
-  if (!Number.isFinite(minutes) || minutes < 0) return DEFAULT_SESSION_TTL_MS;
-  return minutes * 60 * 1000;
-}
-
 function tokenFieldOption(raw: string | undefined): TokenField | undefined {
   if (raw === undefined) return undefined;
   if (raw !== "max_tokens" && raw !== "max_completion_tokens") {
@@ -719,6 +710,9 @@ async function main(argv: string[]): Promise<number> {
     }
   }
   const timeoutMs = settings.timeout === undefined ? DEFAULT_RESPONSE_TIMEOUT_MS : timeoutSecondsToMs(settings.timeout);
+  // Idle timeout for implicit sessions, in minutes; 0 never expires.
+  const sessionTtlMs = () => (settings.cli.sessionTtlMinutes ?? DEFAULT_SESSION_TTL_MS / 60_000) * 60_000;
+  const spinnerMode = settings.cli.spinner ?? "auto";
 
   const createPath = flag("create");
   const skillTerms = (values["skill"] as string[] | undefined) ?? [];
@@ -881,6 +875,7 @@ async function main(argv: string[]): Promise<number> {
       label: `compacting ${existing.turns.length} turn(s)`,
       stream: process.stderr,
       style: colour.dim,
+      mode: spinnerMode,
       ...(bool("quiet") ? { enabled: false } : {}),
     });
     let summary: Awaited<ReturnType<typeof askOnce>>;
@@ -1106,6 +1101,7 @@ async function main(argv: string[]): Promise<number> {
     label: `asking ${request.model}`,
     stream: process.stderr,
     style: colour.dim,
+    mode: spinnerMode,
     ...(bool("quiet") ? { enabled: false } : {}),
   });
 

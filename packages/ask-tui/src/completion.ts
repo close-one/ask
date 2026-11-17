@@ -15,6 +15,8 @@ export interface UIState { working: boolean; alive: boolean }
 /** Composer popups own their selection, async catalogs and temporary previews. */
 export function createCompletion(renderer: CliRenderer, chat: TuiChat, layout: ChatLayout, theme: TuiTheme, state: UIState, actions: {
   submit(): Promise<void>; refreshSummary(): void; applyTheme(name: string, mode: ThemeMode): void;
+  /** A confirmed choice, not a preview: the UI saves it as the default. */
+  themeChosen(name: string, mode: ThemeMode): void;
   addText(text: string, color?: string): void;
 }) {
   const { input, status, picker, pickerMetadata, pickerRows, pickerHint } = layout;
@@ -245,7 +247,7 @@ export function createCompletion(renderer: CliRenderer, chat: TuiChat, layout: C
       const [name, variant] = item.value.split(" ");
       themeBeforePreview = null; actions.applyTheme(name!, variant as ThemeMode);
       input.setText(""); dismissedAt = ""; picker.visible = false; matches = [];
-      status.content = `Theme: ${name} · ${variant} (current TUI run)`; input.focus(); return;
+      actions.themeChosen(name!, variant as ThemeMode); input.focus(); return;
     }
     if (!run) return;
     if (item.kind === "open-skills") { openManager("skills"); return; }

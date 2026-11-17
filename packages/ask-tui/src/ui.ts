@@ -17,6 +17,9 @@ export interface TuiUIOptions {
   readonly createClipboard?: ClipboardFactory;
   /** Startup warnings, shown in the transcript rather than written over the UI. */
   readonly notices?: readonly string[];
+  /** Persist a chosen theme as the default. `warning` explains anything that
+   * would still override it next time. */
+  readonly saveTheme?: (name: string) => Promise<{ readonly file: string; readonly warning?: string | undefined }>;
 }
 
 /** Coordinates components and the single in-flight submission/write lifecycle. */
@@ -43,7 +46,24 @@ export function mountChatUI(renderer: CliRenderer, chat: TuiChat, model: string,
     if (state.alive) layout.refreshSummary(chat.sessionStats, chat.activeSkillNames, chat.pendingCount);
   }
   function addText(content: string, color?: string) { if (state.alive) view.addText(content, color); }
-  completion = createCompletion(renderer, chat, layout, theme, state, { submit, refreshSummary, applyTheme, addText });
+  // A confirmed theme choice (not a preview) becomes the default, one save at a time.
+  let saving: Promise<void> = Promise.resolve();
+  function themeChosen(name: string, mode: ThemeMode) {
+    const label = `Theme: ${terminalField(name)} · ${mode}`;
+    if (!options.saveTheme) { status.content = `${label} (this run)`; return; }
+    status.content = `${label} · saving…`;
+    const save = options.saveTheme;
+    saving = saving.then(() => save(name)).then((result) => {
+      if (!state.alive) return;
+      status.content = `${label} · saved to ${terminalField(result.file)}`;
+      if (result.warning) addText(result.warning, "#fcd34d");
+    }, (error: unknown) => {
+      if (!state.alive) return;
+      status.content = `${label} (this run only)`;
+      addText(`Theme not saved: ${error instanceof Error ? error.message : String(error)}`, "#fda4af");
+    });
+  }
+  completion = createCompletion(renderer, chat, layout, theme, state, { submit, refreshSummary, applyTheme, addText, themeChosen });
   const review = (paths: readonly string[]) => view.review(chat.reviewDetails(paths));
 
   async function submit() {

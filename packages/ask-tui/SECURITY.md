@@ -79,6 +79,15 @@ or `--env-file`.
 renderables, including previous answers and diff panels. It clears selection
 while retaining the user's theme and layout preferences.
 
+## Saved preferences
+
+Confirming a theme in `/theme` is the only way `ask-tui` writes configuration
+(previews do not). It writes only the user's global `tui.json` (or `tui.jsonc`),
+never a project or `--config` file, and changes only the `theme` value,
+validated as for loading. It refuses a file
+that every user can write or another user owns, keeps the file's permissions
+(new files are owner-only), and writes atomically. API keys are never written.
+
 ## Clipboard, usage and context popups
 
 The TUI emits a clipboard-write OSC52 sequence only after the user invokes

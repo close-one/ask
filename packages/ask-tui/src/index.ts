@@ -1,9 +1,10 @@
 // Use the Node launcher so repository Bun hooks cannot execute before this entry.
+import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { createClient, DEFAULT_MODEL, isInsecureHttpEndpoint, isLoopbackEndpoint } from "@codehaus-au/ask/internal/chat";
-import { describeSettings, flagLayer, globalConfigDir, loadSettings } from "@codehaus-au/ask/internal/config";
+import { describeSettings, flagLayer, globalConfigDir, loadSettings, saveGlobalSetting } from "@codehaus-au/ask/internal/config";
 import { legacyEnvNotice } from "@codehaus-au/ask/internal/env";
 import { loadInstructions, renderInstructions } from "@codehaus-au/ask/internal/instructions";
 import { mentionCandidates } from "@codehaus-au/ask/internal/refs";
@@ -151,7 +152,18 @@ async function main() {
     if (startupInstructions.files.length) {
       notices.push(`Instructions: ${startupInstructions.files.map((file) => terminalField(file.display)).join(", ")}`);
     }
-    const ui = mountChatUI(renderer, chat, model, { theme, notices });
+    const saveTheme = async (name: string) => {
+      const file = await saveGlobalSetting("tui", "theme", name);
+      // A layer above the global file would still choose the theme next time.
+      const source = loaded.sources.get("tui.theme");
+      const winner = source && !source.startsWith("global ") ? source : null;
+      const home = homedir();
+      return {
+        file: file.startsWith(`${home}${path.sep}`) ? `~${file.slice(home.length)}` : file,
+        warning: winner ? `Saved, but ${terminalField(winner)} also sets the theme and takes precedence next time.` : undefined,
+      };
+    };
+    const ui = mountChatUI(renderer, chat, model, { theme, notices, saveTheme });
     void mentionCandidates(cwd).then(
       (index) => ui.setCandidates(index.paths, index.truncated),
       (error: unknown) => ui.setIndexError(`Mention index unavailable: ${String(error)}`),

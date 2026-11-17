@@ -5,7 +5,8 @@ import path from "node:path";
 import test, { type TestContext } from "node:test";
 
 import {
-  ConfigFileError, describeSettings, flagLayer, loadSettings, parseJsonc, trustProject, untrustProject,
+  ConfigFileError, describeSettings, flagLayer, loadSettings, parseJsonc, saveGlobalSetting, schemaUrl, setTopLevelKey,
+  trustProject, untrustProject,
 } from "../src/config.ts";
 
 /** A sandbox with separate global, custom and project directories (not a Git repo). */
@@ -246,4 +247,68 @@ test("an untrusted project may only list instruction files inside it; trust lift
   const trusted = await loadSettings({ cwd: project, env });
   assert.equal(trusted.instructions.length, 4);
   assert.ok(trusted.instructions.every((entry) => entry.within === null));
+});
+
+
+test("setTopLevelKey changes one top-level value and keeps comments and layout", () => {
+  const commented = '{\n  // my theme\n  "theme": "nord", // dark\n  "mouse": true,\n}\n';
+  assert.equal(setTopLevelKey(commented, "theme", "dracula"), '{\n  // my theme\n  "theme": "dracula", // dark\n  "mouse": true,\n}\n');
+  assert.equal(setTopLevelKey('{\n  "mouse": true // keep\n}\n', "theme", "x"), '{\n  "mouse": true, // keep\n  "theme": "x"\n}\n');
+  assert.equal(setTopLevelKey("{}", "theme", "x"), '{\n  "theme": "x"\n}');
+  assert.equal(setTopLevelKey('{\n  "contextWindow": 1000,\n}', "theme", "x"), '{\n  "contextWindow": 1000,\n  "theme": "x"\n}');
+  // Only the top level, the last duplicate (as JSON.parse reads it), and never text inside strings.
+  const tricky = '{ "a": { "theme": "nested" }, "s": "{ \\"theme\\": 1 } // no", "theme": "one", "theme": "two" }';
+  const edited = parseJsonc(setTopLevelKey(tricky, "theme", "new"), "edited") as Record<string, unknown>;
+  assert.deepEqual(edited, { a: { theme: "nested" }, s: '{ "theme": 1 } // no', theme: "new" });
+  assert.equal(setTopLevelKey('{ "theme": { "x": [1, 2] }, "b": 1 }', "theme", "flat"), '{ "theme": "flat", "b": 1 }');
+  assert.throws(() => setTopLevelKey("[]", "theme", "x"), /must contain a JSON object/);
+});
+
+test("saveGlobalSetting writes only the user's global file, creating or editing it in place", async (t) => {
+  const { global, env, write } = await sandbox(t);
+  const created = await saveGlobalSetting("tui", "theme", "dracula", env);
+  assert.equal(created, path.join(global, "tui.json"));
+  const fresh = parseJsonc(await (await import("node:fs/promises")).readFile(created, "utf8"), created);
+  assert.deepEqual(fresh, { $schema: schemaUrl("tui"), theme: "dracula" });
+  if (process.platform !== "win32") assert.equal((await (await import("node:fs/promises")).stat(created)).mode & 0o777, 0o600);
+  assert.equal((await loadSettings({ cwd: global, env })).settings.tui.theme, "dracula");
+
+  await rm(created);
+  await write(path.join(global, "tui.jsonc"), '{\n  // mine\n  "mouse": false,\n}\n');
+  await chmod(path.join(global, "tui.jsonc"), 0o640);
+  assert.equal(await saveGlobalSetting("tui", "theme", "nord", env), path.join(global, "tui.jsonc"));
+  const { readFile: read, stat: info } = await import("node:fs/promises");
+  assert.equal(await read(path.join(global, "tui.jsonc"), "utf8"), '{\n  // mine\n  "mouse": false,\n  "theme": "nord"\n}\n');
+  if (process.platform !== "win32") assert.equal((await info(path.join(global, "tui.jsonc"))).mode & 0o777, 0o640, "permissions kept");
+
+  await assert.rejects(saveGlobalSetting("tui", "colour", "x", env), /colour is not a tui\.json setting/);
+  await assert.rejects(saveGlobalSetting("tui", "contextWindow", 0, env), /contextWindow must be a positive integer/);
+  await write(path.join(global, "tui.json"), "{}");
+  await assert.rejects(saveGlobalSetting("tui", "theme", "x", env), /both .*tui\.json and .*tui\.jsonc exist/);
+  await rm(path.join(global, "tui.json"));
+  if (process.platform !== "win32") {
+    await chmod(path.join(global, "tui.jsonc"), 0o666);
+    await assert.rejects(saveGlobalSetting("tui", "theme", "x", env), /not writing .*writable by every user/);
+  }
+});
+
+test("cli.json sets the session TTL and spinner; ASK_SESSION_TTL and ASK_SPINNER override them", async (t) => {
+  const { global, project, env, write } = await sandbox(t);
+  await write(path.join(global, "cli.json"), { sessionTtlMinutes: 0, spinner: "ascii" });
+  const file = await loadSettings({ cwd: project, env });
+  assert.equal(file.settings.cli.sessionTtlMinutes, 0);
+  assert.equal(file.settings.cli.spinner, "ascii");
+  const overridden = await loadSettings({ cwd: project, env: { ...env, ASK_SESSION_TTL: "30", ASK_SPINNER: "0" } });
+  assert.equal(overridden.settings.cli.sessionTtlMinutes, 30);
+  assert.equal(overridden.settings.cli.spinner, "off");
+  assert.equal(overridden.sources.get("cli.spinner"), "env ASK_SPINNER");
+  // Earlier meanings of ASK_SPINNER are kept: anything but 0/off/false or ascii is automatic.
+  for (const [raw, mode] of [["false", "off"], ["ASCII", "ascii"], ["1", "auto"], ["yes", "auto"]] as const) {
+    assert.equal((await loadSettings({ cwd: project, env: { ...env, ASK_SPINNER: raw } })).settings.cli.spinner, mode, raw);
+  }
+  await assert.rejects(loadSettings({ cwd: project, env: { ...env, ASK_SESSION_TTL: "soon" } }), /Invalid ASK_SESSION_TTL: must be a number of at least 0/);
+  await write(path.join(global, "cli.json"), { spinner: "fast" });
+  await assert.rejects(loadSettings({ cwd: project, env }), /spinner must be "auto", "off" or "ascii"/);
+  await write(path.join(global, "cli.json"), { sessionTtlMinutes: -1 });
+  await assert.rejects(loadSettings({ cwd: project, env }), /sessionTtlMinutes must be a number of at least 0/);
 });

@@ -11,7 +11,7 @@ Pasted text is never read as a mention. Each submission makes one request; no mo
 /skill [term] or /skills [term]  open the same searchable skill-selection popup
 /unskill [name]  choose/remove an active skill (instructions only; no scripts)
 /copy  copy the last answer (Markdown) to your terminal clipboard
-/theme [name]  choose a bundled termcn theme for this TUI run
+/theme [name]  choose a theme; it is saved as your default in tui.json
 /new  clear this in-memory conversation and transcript    /help    /quit
 Enter selects an open mention, otherwise sends · Shift+Enter inserts a newline
 Type / for searchable commands · /context, /detach and /unskill open management popups

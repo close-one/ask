@@ -10,7 +10,7 @@ export const SLASH_COMMANDS = [
   { value: "/apply", description: "Write reviewed edits (all, or name files)" },
   { value: "/reject", description: "Discard pending edits (all, or name files)" },
   { value: "/copy", description: "Copy the last answer to the clipboard as Markdown" },
-  { value: "/theme", description: "Choose a termcn color theme" },
+  { value: "/theme", description: "Choose a color theme (saved as your default)" },
   { value: "/new", description: "Clear conversation, attachments and skills" },
   { value: "/help", description: "Show commands and keyboard shortcuts" },
   { value: "/quit", description: "Exit the TUI" },

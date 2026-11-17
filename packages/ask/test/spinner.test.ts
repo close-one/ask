@@ -115,3 +115,15 @@ test("a disabled spinner writes nothing at all", () => {
   assert.deepEqual(stream.written, [], "safe to use unconditionally");
   assert.equal(spinner.animating, false);
 });
+
+test("the configured spinner mode overrides detection: off never animates, ascii forces ASCII frames", () => {
+  const writes: string[] = [];
+  const stream = { isTTY: true, write: (text: string) => { writes.push(text); return true; } };
+  const env = { TERM: "xterm-256color", LANG: "en_AU.UTF-8" };
+  const off = startSpinner({ label: "x", stream, env, mode: "off" });
+  assert.equal(off.animating, false);
+  const ascii = startSpinner({ label: "x", stream, env, mode: "ascii", intervalMs: 60_000 });
+  ascii.stop();
+  assert.ok(writes.some((text) => text.includes("-")), JSON.stringify(writes));
+  assert.ok(!writes.some((text) => /[⠋⠙⠹]/.test(text)), "no braille frames");
+});

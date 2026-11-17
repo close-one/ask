@@ -82,7 +82,7 @@ chmod 600 ~/.config/ask/ask.jsonc
 | File | Holds |
 | --- | --- |
 | `ask.json` or `ask.jsonc` | common settings: `endpoint` (`url`, `apiKey`, `organization`, `project`), `model`, `system`, `temperature`, `maxTokens`, `timeout` (seconds), `instructions` |
-| `cli.json` or `cli.jsonc` | CLI settings: `sessionMaxTokens`, `next` |
+| `cli.json` or `cli.jsonc` | CLI settings: `sessionMaxTokens`, `sessionTtlMinutes` (0 never expires), `next`, `spinner` (`"auto"`, `"off"` or `"ascii"`) |
 | `tui.json` or `tui.jsonc` | TUI settings: `theme`, `contextWindow`, `mouse` |
 | `AGENTS.md` | personal or project instructions added to every request (see below) |
 | `themes/<name>.json(c)` | custom `ask-tui` themes (see the TUI README) |
@@ -95,7 +95,7 @@ chmod 600 ~/.config/ask/ask.jsonc
 3. `ask.json(c)` in the project root (the Git work tree, or the current directory)
 4. `.ask/` in the project root (`ask`, `cli` and `tui` files)
 5. `$ASK_CONFIG_CONTENT`, inline JSON with the same keys, plus `cli` and `tui` sections
-6. single-setting variables: `ASK_MODEL`, `ASK_SYSTEM`, `ASK_TIMEOUT`, `ASK_NEXT`, `ASK_THEME`, `ASK_CONTEXT_WINDOW`
+6. single-setting variables: `ASK_MODEL`, `ASK_SYSTEM`, `ASK_TIMEOUT`, `ASK_NEXT`, `ASK_SESSION_TTL`, `ASK_SPINNER`, `ASK_THEME`, `ASK_CONTEXT_WINDOW`
 7. command-line flags such as `--model`, `--timeout` and `--base-url`
 
 Objects merge key by key, other values are replaced, and `null` removes a lower
@@ -135,6 +135,10 @@ and checking in editors such as VS Code (`ask` itself ignores `$schema`):
 
 Use `cli.schema.json` and `tui.schema.json` for `cli.json` and `tui.json`. The
 schemas describe the same rules the loader enforces; a test keeps them in step.
+
+`ask` never writes configuration. `ask-tui` saves a theme you choose with
+`/theme` by changing just the `theme` value in your global `tui.json`, keeping
+comments and other settings.
 
 **See the result** with `ask --show-config` (or `ask /config`). It lists every
 layer, every setting and where it came from, and anything ignored; API keys are
@@ -512,9 +516,9 @@ matters when a local model takes half a minute:
 
 It writes to stderr and only animates when stderr is a terminal, so piped output
 and CI logs stay clean; the line is erased before the answer prints. `--quiet`,
-`ASK_SPINNER=0`, `TERM=dumb` or any `CI` variable disables it, and
-`ASK_SPINNER=ascii` (also used automatically on a non-UTF-8 locale) swaps braille
-for `-\|/`.
+`"spinner": "off"` in `cli.json` (or `ASK_SPINNER=0`), `TERM=dumb` or any `CI`
+variable disables it. `"spinner": "ascii"` (or `ASK_SPINNER=ascii`) swaps braille
+for `-\|/`, as happens automatically on a non-UTF-8 locale.
 
 ### Rendered answers
 
@@ -925,7 +929,7 @@ what goes into that request. No tools, no loop.
 | **Implicit only when stdout is a terminal.** Piped and scripted runs are always one-shot | `git diff \| ask 'review'` in a loop must stay reproducible. `--session <name>` forces sessions on anyway |
 | **Turns store your question, the refs as typed, and the answer — never file contents.** Files are re-read from disk each turn | A follow-up after an edit sees current code, and a file is sent once per request rather than once per turn |
 | **Scoped to the git repo root** (falling back to cwd) | You ask about a codebase, not a terminal. Each project gets its own thread |
-| **Idle threads expire after 2 h** (`ASK_SESSION_TTL`, minutes) | Yesterday's conversation should not colour today's unrelated question |
+| **Idle threads expire after 2 h** (`sessionTtlMinutes` in `cli.json` or `ASK_SESSION_TTL`; 0 never expires) | Yesterday's conversation should not colour today's unrelated question |
 | **Oldest turns are pruned past 32k tokens** (`--session-max-tokens`), and pruning is announced on stderr | The whole thread is resent every turn, so silent growth is the one thing implicit state must not do |
 | **Stored `0600` under `$XDG_STATE_HOME/ask/`** (or `ASK_STATE_DIR`), outside any repo, and `.ask/` is in the skip rules | A session quotes your source. It must also never be attachable, or the model reads its own transcript back as "code" |
 | **`--dry-run` includes the assembled history**; the footer always names the thread and turn | Implicit state has to be visible, and "you can always see exactly what is sent" is the audit story |

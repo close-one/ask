@@ -30,6 +30,7 @@
   // "instructions": ["~/notes/style.md", "rules/*.md"],
 }
 
-// CLI-only settings go in cli.json(c):  { "sessionMaxTokens": 32000, "next": true }
+// CLI-only settings go in cli.json(c):
+//   { "sessionMaxTokens": 32000, "sessionTtlMinutes": 120, "next": true, "spinner": "auto" }
 // TUI-only settings go in tui.json(c):  { "theme": "dracula", "contextWindow": 32768, "mouse": true }
 // with "$schema" set to .../schema/cli.schema.json or .../schema/tui.schema.json.

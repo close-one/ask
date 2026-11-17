@@ -52,11 +52,17 @@ export interface Settings {
   /** Instruction files or globs, resolved to absolute paths. */
   readonly instructions?: readonly string[];
   readonly endpoint: EndpointSettings;
-  readonly cli: { readonly sessionMaxTokens?: number; readonly next?: boolean };
+  readonly cli: {
+    readonly sessionMaxTokens?: number;
+    /** Idle minutes before a thread starts fresh; 0 never expires. */
+    readonly sessionTtlMinutes?: number;
+    readonly next?: boolean;
+    readonly spinner?: "auto" | "off" | "ascii";
+  };
   readonly tui: { readonly theme?: string; readonly contextWindow?: number; readonly mouse?: boolean };
 }
 
-export type Kind = "string" | "stringArray" | "boolean" | "positiveInteger" | "timeout" | "temperature";
+export type Kind = "string" | "stringArray" | "boolean" | "positiveInteger" | "nonNegativeNumber" | "timeout" | "temperature" | "spinner";
 export interface Shape { readonly [key: string]: Kind | Shape }
 
 const ENDPOINT: Shape = { url: "string", apiKey: "string", organization: "string", project: "string" };
@@ -64,7 +70,7 @@ const COMMON: Shape = {
   model: "string", system: "string", temperature: "temperature", maxTokens: "positiveInteger",
   timeout: "timeout", instructions: "stringArray", endpoint: ENDPOINT,
 };
-const CLI: Shape = { sessionMaxTokens: "positiveInteger", next: "boolean" };
+const CLI: Shape = { sessionMaxTokens: "positiveInteger", sessionTtlMinutes: "nonNegativeNumber", next: "boolean", spinner: "spinner" };
 const TUI: Shape = { theme: "string", contextWindow: "positiveInteger", mouse: "boolean" };
 /** The whole configuration, as ASK_CONFIG_CONTENT and flags express it. */
 const ALL: Shape = { ...COMMON, cli: CLI, tui: TUI };
@@ -85,6 +91,8 @@ export const NAMED_VARIABLES: readonly { readonly name: string; readonly path: r
   { name: "ASK_SYSTEM", path: ["system"] },
   { name: "ASK_TIMEOUT", path: ["timeout"] },
   { name: "ASK_NEXT", path: ["cli", "next"] },
+  { name: "ASK_SESSION_TTL", path: ["cli", "sessionTtlMinutes"] },
+  { name: "ASK_SPINNER", path: ["cli", "spinner"] },
   { name: "ASK_THEME", path: ["tui", "theme"] },
   { name: "ASK_CONTEXT_WINDOW", path: ["tui", "contextWindow"] },
 ];
@@ -171,6 +179,12 @@ function checkValue(kind: Kind, value: unknown, where: string): unknown {
     case "boolean": if (typeof value !== "boolean") fail("true or false"); return value;
     case "positiveInteger":
       if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) fail("a positive integer");
+      return value;
+    case "nonNegativeNumber":
+      if (typeof value !== "number" || !Number.isFinite(value) || value < 0) fail("a number of at least 0");
+      return value;
+    case "spinner":
+      if (value !== "auto" && value !== "off" && value !== "ascii") fail('"auto", "off" or "ascii"');
       return value;
     case "temperature":
       if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 2) fail("a number from 0 to 2");
@@ -309,6 +323,133 @@ async function projectFiles(root: string): Promise<string[]> {
 }
 
 // ---------------------------------------------------------------------------
+// Saving a setting
+
+interface Token { readonly kind: string; readonly start: number; readonly end: number }
+
+/** Significant JSONC tokens with their positions; comments and whitespace are skipped. */
+function tokenize(text: string): Token[] {
+  const tokens: Token[] = [];
+  for (let i = 0; i < text.length;) {
+    const char = text[i]!;
+    if (/\s/.test(char)) { i++; continue; }
+    if (char === "/" && text[i + 1] === "/") { const end = text.indexOf("\n", i); i = end < 0 ? text.length : end; continue; }
+    if (char === "/" && text[i + 1] === "*") { const end = text.indexOf("*/", i + 2); i = end < 0 ? text.length : end + 2; continue; }
+    if (char === '"') {
+      let j = i + 1;
+      while (j < text.length && text[j] !== '"') j += text[j] === "\\" ? 2 : 1;
+      tokens.push({ kind: "string", start: i, end: j + 1 });
+      i = j + 1;
+      continue;
+    }
+    if ("{}[]:,".includes(char)) { tokens.push({ kind: char, start: i, end: i + 1 }); i++; continue; }
+    let j = i;
+    while (j < text.length && !/[\s,:[\]{}"/]/.test(text[j]!)) j++;
+    tokens.push({ kind: "literal", start: i, end: Math.max(j, i + 1) });
+    i = Math.max(j, i + 1);
+  }
+  return tokens;
+}
+
+/**
+ * Set one top-level key in a JSON(C) object, changing only that value (or adding
+ * it before the closing brace). Comments, formatting and other keys are kept.
+ */
+export function setTopLevelKey(text: string, key: string, value: unknown): string {
+  const tokens = tokenize(text);
+  if (tokens[0]?.kind !== "{") throw new ConfigFileError("the file must contain a JSON object");
+  const encoded = JSON.stringify(value);
+  let depth = 0;
+  let replace: { start: number; end: number } | null = null;
+  let close = -1;
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i]!;
+    if (token.kind === "{" || token.kind === "[") depth++;
+    else if (token.kind === "}" || token.kind === "]") {
+      depth--;
+      if (depth === 0) { close = i; break; }
+    } else if (depth === 1 && token.kind === "string" && tokens[i + 1]?.kind === ":" &&
+      JSON.parse(text.slice(token.start, token.end)) === key) {
+      // The value runs to its matching bracket; the last duplicate wins, as in JSON.parse.
+      const first = tokens[i + 2];
+      if (!first) break;
+      let end = first;
+      if (first.kind === "{" || first.kind === "[") {
+        let nested = 0;
+        for (let j = i + 2; j < tokens.length; j++) {
+          const kind = tokens[j]!.kind;
+          if (kind === "{" || kind === "[") nested++;
+          if (kind === "}" || kind === "]") nested--;
+          if (nested === 0) { end = tokens[j]!; break; }
+        }
+      }
+      replace = { start: first.start, end: end.end };
+    }
+  }
+  if (close < 0) throw new ConfigFileError("the file's JSON object is not closed");
+  let next: string;
+  if (replace) {
+    next = text.slice(0, replace.start) + encoded + text.slice(replace.end);
+  } else {
+    const last = tokens[close - 1]!;
+    const firstKey = tokens.find((token, index) => index > 0 && token.kind === "string");
+    const lineStart = firstKey ? text.lastIndexOf("\n", firstKey.start) + 1 : -1;
+    const indent = firstKey && /^\s*$/.test(text.slice(lineStart, firstKey.start)) ? text.slice(lineStart, firstKey.start) : "  ";
+    const entry = `${indent}${JSON.stringify(key)}: ${encoded}`;
+    // A comma after the previous value if needed, then the new entry on its own
+    // line before the closing brace, so trailing comments stay with their lines.
+    const comma = last.kind === "{" || last.kind === "," ? "" : ",";
+    const brace = tokens[close]!.start;
+    const braceLine = text.lastIndexOf("\n", brace - 1) + 1;
+    const ownLine = /^\s*$/.test(text.slice(braceLine, brace)) && braceLine > last.end;
+    const at = ownLine ? braceLine : brace;
+    next = text.slice(0, last.end) + comma + text.slice(last.end, at) +
+      (ownLine ? `${entry}\n` : `\n${entry}\n`) + text.slice(at);
+  }
+  const parsed = parseJsonc(next, "edited file") as Plain;
+  if (JSON.stringify(parsed[key]) !== encoded) throw new ConfigFileError("could not update the file safely");
+  return next;
+}
+
+/** The URL editors use to check each file; ask itself ignores `$schema`. */
+export function schemaUrl(name: "ask" | "cli" | "tui"): string {
+  return `https://raw.githubusercontent.com/codehausau/ask/main/packages/ask/schema/${name}.schema.json`;
+}
+
+/**
+ * Save one setting in the user's global config file (never a project or --config
+ * file), creating it if needed. Returns the file written.
+ */
+export async function saveGlobalSetting(
+  name: "ask" | "cli" | "tui", key: string, value: unknown, env: NodeJS.ProcessEnv = process.env,
+): Promise<string> {
+  const kind = CONFIG_SHAPES[name][key];
+  if (typeof kind !== "string") throw new ConfigFileError(`${key} is not a ${name}.json setting`);
+  checkValue(kind, value, `${name}.json: ${key}`);
+  const dir = globalConfigDir(env);
+  const existing = await findFile(dir, name);
+  const file = existing ?? path.join(dir, `${name}.json`);
+  let text: string;
+  let mode = 0o600;
+  if (existing) {
+    const refused = await unsafeReason(existing);
+    if (refused) throw new ConfigFileError(`not writing ${terminalField(existing)}: ${refused}`);
+    mode = (await stat(existing)).mode & 0o777;
+    const current = await readFile(existing, "utf8");
+    parseJsonc(current, existing);
+    text = setTopLevelKey(current, key, value);
+  } else {
+    await mkdir(dir, { recursive: true, mode: 0o700 });
+    text = `{\n  "$schema": ${JSON.stringify(schemaUrl(name))},\n  ${JSON.stringify(key)}: ${JSON.stringify(value)}\n}\n`;
+  }
+  // Atomic: a crash mid-write never leaves a half-written config file.
+  const temporary = path.join(dir, `.${path.basename(file)}.${process.pid}.tmp`);
+  await writeFile(temporary, text, { mode });
+  await rename(temporary, file);
+  return file;
+}
+
+// ---------------------------------------------------------------------------
 // Trust
 
 interface TrustStore { version: 1; projects: Record<string, { hash: string; files: string[] }> }
@@ -431,6 +572,16 @@ function settingValue(name: string, raw: string, kind: Kind): unknown {
       const number = Number(raw);
       if (!raw.trim() || !Number.isSafeInteger(number) || number <= 0) throw invalid("a positive integer");
       return number;
+    }
+    case "nonNegativeNumber": {
+      const number = Number(raw);
+      if (!raw.trim() || !Number.isFinite(number) || number < 0) throw invalid("a number of at least 0");
+      return number;
+    }
+    // As before: 0 (or off/false) disables, ascii forces ASCII frames, anything else is automatic.
+    case "spinner": {
+      const value = raw.trim().toLowerCase();
+      return ["0", "off", "false"].includes(value) ? "off" : value === "ascii" ? "ascii" : "auto";
     }
     case "temperature": {
       const number = Number(raw);

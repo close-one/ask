@@ -57,6 +57,7 @@ Configuration is shared with `ask`: layered JSON in `~/.config/ask/`, an optiona
 {
   "$schema": "https://raw.githubusercontent.com/codehausau/ask/main/packages/ask/schema/tui.schema.json",
   "theme": "dracula", "contextWindow": 32768, "mouse": true,
+  "updateView": "search-replace", // or "diff"
 }
 ```
 
@@ -373,6 +374,14 @@ It produces ordinary response text with a defined format, not API tool calls:
 > >>>>>>> REPLACE
 > </update>
 > ```
+
+Update blocks appear in inset, bordered, theme-aware code panels, with the filename
+above the border. SEARCH content is red and REPLACE content is green. Click the header
+to toggle between SEARCH/REPLACE and a colored snippet diff; the code itself stays
+selectable. Set `"updateView": "diff"` in `tui.json` to start in diff view instead
+of the default `"search-replace"`. Clicking changes only that panel's view.
+Snippet line numbers are relative to the SEARCH/REPLACE text, not the full file.
+Use `/review` for the full-file approval diff before `/apply`.
 
 After the answer, the TUI lists each proposed file with its added/removed line
 counts. Files that can run code or change automation (CI workflows, package

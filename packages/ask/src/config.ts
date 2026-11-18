@@ -42,6 +42,8 @@ export interface EndpointSettings {
   readonly project?: string;
 }
 
+export type UpdateView = "search-replace" | "diff";
+
 export interface Settings {
   readonly model?: string;
   readonly system?: string;
@@ -59,10 +61,10 @@ export interface Settings {
     readonly next?: boolean;
     readonly spinner?: "auto" | "off" | "ascii";
   };
-  readonly tui: { readonly theme?: string; readonly contextWindow?: number; readonly mouse?: boolean };
+  readonly tui: { readonly theme?: string; readonly contextWindow?: number; readonly mouse?: boolean; readonly updateView?: UpdateView };
 }
 
-export type Kind = "string" | "stringArray" | "boolean" | "positiveInteger" | "nonNegativeNumber" | "timeout" | "temperature" | "spinner";
+export type Kind = "string" | "stringArray" | "boolean" | "positiveInteger" | "nonNegativeNumber" | "timeout" | "temperature" | "spinner" | "updateView";
 export interface Shape { readonly [key: string]: Kind | Shape }
 
 const ENDPOINT: Shape = { url: "string", apiKey: "string", organization: "string", project: "string" };
@@ -71,7 +73,7 @@ const COMMON: Shape = {
   timeout: "timeout", instructions: "stringArray", endpoint: ENDPOINT,
 };
 const CLI: Shape = { sessionMaxTokens: "positiveInteger", sessionTtlMinutes: "nonNegativeNumber", next: "boolean", spinner: "spinner" };
-const TUI: Shape = { theme: "string", contextWindow: "positiveInteger", mouse: "boolean" };
+const TUI: Shape = { theme: "string", contextWindow: "positiveInteger", mouse: "boolean", updateView: "updateView" };
 /** The whole configuration, as ASK_CONFIG_CONTENT and flags express it. */
 const ALL: Shape = { ...COMMON, cli: CLI, tui: TUI };
 
@@ -185,6 +187,9 @@ function checkValue(kind: Kind, value: unknown, where: string): unknown {
       return value;
     case "spinner":
       if (value !== "auto" && value !== "off" && value !== "ascii") fail('"auto", "off" or "ascii"');
+      return value;
+    case "updateView":
+      if (value !== "search-replace" && value !== "diff") fail('"search-replace" or "diff"');
       return value;
     case "temperature":
       if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 2) fail("a number from 0 to 2");
@@ -567,6 +572,7 @@ function settingValue(name: string, raw: string, kind: Kind): unknown {
   switch (kind) {
     case "string": return raw;
     case "stringArray": return [raw];
+    case "updateView": return checkValue(kind, raw, name);
     case "boolean": return raw !== "0" && raw.toLowerCase() !== "false";
     case "positiveInteger": {
       const number = Number(raw);

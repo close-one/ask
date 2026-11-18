@@ -4,8 +4,10 @@ import {
 } from "@opentui/core";
 import type { Token } from "marked";
 import { sanitizeForTerminal, terminalField } from "@codehaus-au/ask/internal/terminal";
+import type { UpdateView } from "@codehaus-au/ask/internal/config";
 import type { TuiTheme } from "./theme.ts";
-import type { UpdateSummary } from "./updates.ts";
+import { parseUpdateRegions, type UpdateRegion, type UpdateSummary } from "./updates.ts";
+import { createUpdatePanel } from "./update-panel.ts";
 import { COMPOSER_PADDING } from "./layout.ts";
 
 /** Native inline markup, without a Tree-sitter worker/download. */
@@ -25,7 +27,7 @@ function inlineChunks(tokens: readonly Token[]): TextChunk[] {
   });
 }
 
-export function createTranscript(renderer: CliRenderer, transcript: ScrollBoxRenderable, theme: TuiTheme) {
+export function createTranscript(renderer: CliRenderer, transcript: ScrollBoxRenderable, theme: TuiTheme, updateView: UpdateView = "search-replace") {
   let serial = 0;
   const markdownText = new Set<TextRenderable>();
   const caps: { text: TextRenderable; glyph: string }[] = [];
@@ -67,7 +69,7 @@ export function createTranscript(renderer: CliRenderer, transcript: ScrollBoxRen
     transcript.add(message);
   }
 
-  function addAnswer(content: string) {
+  function addMarkdown(content: string) {
     transcript.add(new MarkdownRenderable(renderer, {
       id: `answer-${serial++}`, content: sanitizeForTerminal(content), syntaxStyle: style,
       width: "100%", flexShrink: 0, conceal: true, internalBlockMode: "top-level",
@@ -84,6 +86,24 @@ export function createTranscript(renderer: CliRenderer, transcript: ScrollBoxRen
         return text;
       },
     }));
+  }
+
+  function addAnswer(content: string) {
+    let regions: UpdateRegion[];
+    try { regions = parseUpdateRegions(content); }
+    catch { addMarkdown(content); return; }
+    if (!regions.length) { addMarkdown(content); return; }
+    const lines = content.replace(/\r\n/g, "\n").split("\n");
+    let start = 0;
+    for (const region of regions) {
+      const prose = lines.slice(start, region.startLine).join("\n");
+      if (prose.trim()) addMarkdown(prose);
+      const raw = lines.slice(region.startLine, region.endLine).join("\n");
+      transcript.add(createUpdatePanel(renderer, `update-${serial++}`, region.block, raw, updateView));
+      start = region.endLine;
+    }
+    const prose = lines.slice(start).join("\n");
+    if (prose.trim()) addMarkdown(prose);
   }
 
   /** What the model proposed, before any diff is shown. Nothing is written yet. */

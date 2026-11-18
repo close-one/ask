@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { collectContext } from "@codehaus-au/ask/internal/context";
 import {
-  applyUpdates, captureEditableFiles, parseUpdates, prepareUpdates, sensitivePathReason, updateDiff, updateSummary,
+  applyUpdates, captureEditableFiles, parseUpdates, parseUpdateRegions, prepareUpdates, sensitivePathReason, updateDiff, updateSummary,
   type EditableFile,
 } from "../src/updates.ts";
 
@@ -33,6 +33,21 @@ test("malformed, nested, empty and incomplete proposals fail closed", () => {
     update("a\nforged", "old", "new"),
     update("a", "old", "\ud800"),
   ]) assert.throws(() => parseUpdates(text), Error, text);
+});
+
+test("display regions use the protocol parser, preserve order and ignore fenced examples", () => {
+  const first = update("a.ts", "old", "new");
+  const second = update("b.ts", "remove", "");
+  const text = `Before\n\n\`\`\`text\n${first}\n\`\`\`\n\n${first}\nBetween\n${second}\nAfter`;
+  for (const source of [text, text.replace(/\n/g, "\r\n")]) {
+    const lines = source.replace(/\r\n/g, "\n").split("\n");
+    const regions = parseUpdateRegions(source);
+    assert.deepEqual(regions.map((region) => lines.slice(region.startLine, region.endLine).join("\n")), [first, second]);
+    assert.deepEqual(regions.map((region) => region.block), parseUpdates(source));
+    assert.equal(lines[regions[0]!.endLine], "Between");
+    assert.equal(lines[regions[1]!.endLine], "After");
+  }
+  assert.throws(() => parseUpdateRegions(`${text}\n<update path="incomplete">`), /missing SEARCH/);
 });
 
 test("diff previews make final-newline changes explicit", () => {

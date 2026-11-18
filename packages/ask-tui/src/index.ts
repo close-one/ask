@@ -173,7 +173,7 @@ async function main() {
         warning: winner ? `Saved, but ${terminalField(winner)} also sets the theme and takes precedence next time.` : undefined,
       };
     };
-    const ui = mountChatUI(renderer, chat, model, { theme, notices, saveTheme });
+    const ui = mountChatUI(renderer, chat, model, { theme, notices, saveTheme, ...(settings.tui.updateView ? { updateView: settings.tui.updateView } : {}) });
     void mentionCandidates(cwd).then(
       (index) => ui.setCandidates(index.paths, index.truncated),
       (error: unknown) => ui.setIndexError(`Mention index unavailable: ${String(error)}`),

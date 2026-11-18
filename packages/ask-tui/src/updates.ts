@@ -32,12 +32,26 @@ export interface UpdateBlock {
   readonly replacement: string;
 }
 
+export interface UpdateRegion {
+  readonly block: UpdateBlock;
+  /** Zero-based line range in the response, with an exclusive end. */
+  readonly startLine: number;
+  readonly endLine: number;
+}
+
 /** Strict line-based grammar. Examples inside Markdown fences are not proposals.
  * CRLF responses are read as LF; prepareUpdates restores a CRLF file's endings.
  */
 export function parseUpdates(text: string): UpdateBlock[] {
+  return parseUpdateRegions(text).map((region) => region.block);
+}
+
+/** The same strict parser also locates blocks for presentation. Nothing inside a
+ * Markdown fence is treated as an update, and any malformed block fails closed.
+ */
+export function parseUpdateRegions(text: string): UpdateRegion[] {
   const lines = text.replace(/\r\n/g, "\n").split("\n");
-  const updates: UpdateBlock[] = [];
+  const updates: UpdateRegion[] = [];
   let fence = "";
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
@@ -48,6 +62,7 @@ export function parseUpdates(text: string): UpdateBlock[] {
     }
     if (fenced) { fence = fenced[1]!; continue; }
     if (!line.includes("<update") && !line.includes("</update>")) continue;
+    const startLine = i;
     const start = /^<update path=("(?:[^"\\]|\\.)+")>$/.exec(line);
     if (!start) throw new Error("Malformed <update> block; no edits are available.");
     const target: unknown = JSON.parse(start[1]!);
@@ -69,7 +84,7 @@ export function parseUpdates(text: string): UpdateBlock[] {
     if (!before || /^(?:<{7} SEARCH|={7}|>{7} REPLACE|<\/?update\b)/m.test(before + "\n" + after)) {
       throw new Error("Empty SEARCH or nested/reserved update markers.");
     }
-    updates.push({ path: target, search: before, replacement: after });
+    updates.push({ block: { path: target, search: before, replacement: after }, startLine, endLine: i + 1 });
     if (updates.length > 100) throw new Error("Too many update blocks (maximum 100).");
   }
   return updates;

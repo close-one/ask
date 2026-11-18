@@ -1463,6 +1463,109 @@ test("approval diffs expose terminal-control payloads that will be written", asy
   } finally { await setup.dispose(); await rm(cwd, { recursive: true, force: true }); }
 });
 
+for (const updateView of ["search-replace", "diff"] as const) {
+  test(`update panels toggle from ${updateView}, retain control payloads and never authorize writes`, async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "ask-tui-update-view-"));
+    const setup = await createTestRenderer({ width: 140, height: 60, kittyKeyboard: true });
+    try {
+      const original = "const safe = true;\n";
+      const replacement = 'const safe = false; /*\x1b]0;*/hiddenEffect();/*\x07*/';
+      await writeFile(path.join(cwd, "example.js"), original);
+      const raw = `<update path="example.js">\n<<<<<<< SEARCH\n${original.trimEnd()}\n=======\n${replacement}\n>>>>>>> REPLACE\n</update>`;
+      let requests = 0;
+      const client: ChatClient = { chat: { completions: { async create() {
+        requests++;
+        return { id: "test", object: "chat.completion", created: 0, model: "test", choices: [
+          { index: 0, finish_reason: "stop", logprobs: null, message: { role: "assistant", refusal: null,
+            content: `BEFORE_PANEL\n\n${raw}\n\nAFTER_PANEL` } },
+        ] };
+      } } } };
+      const chat = new TuiChat(client, { cwd });
+      const ui = mountChatUI(setup.renderer, chat, "test", { updateView });
+      ui.input.setText("Improve @example.js please"); ui.input.gotoBufferEnd(); setup.mockInput.pressEnter();
+      await waitUntilIdle(ui); await setup.flush();
+      const panel = ui.transcript.getChildren().find((node) => node.id.startsWith("update-"));
+      assert.ok(panel instanceof BoxRenderable);
+      const header = panel.getChildren().find((node) => node.id.endsWith("-toggle"));
+      const code = panel.getChildren().find((node) => node.id.endsWith("-block"));
+      assert.ok(code instanceof BoxRenderable);
+      const body = code.getChildren().find((node) => node.id.endsWith("-code"));
+      assert.ok(header instanceof BoxRenderable && body instanceof TextRenderable);
+      const hint = header.getChildren().find((node) => node.id.endsWith("-hint"));
+      assert.ok(hint instanceof TextRenderable);
+      assert.equal(hint.x + hint.width, code.x + code.width);
+      assert.equal(hint.y, header.y);
+      const text = () => body.chunks.map((chunk) => chunk.text).join("");
+      const check = (diff: boolean) => {
+        assert.match(text(), /hiddenEffect\(\)/);
+        assert.match(text(), /\\u001b\]0;/);
+        assert.match(text(), /\\u0007/);
+        assert.doesNotMatch(text(), /\x1b|\x07/);
+        if (diff) {
+          assert.match(text(), /-const safe = true;/);
+          assert.match(text(), /\+const safe = false;/);
+          assert.doesNotMatch(text(), /<<<<<<< SEARCH/);
+        } else assert.match(text(), /<<<<<<< SEARCH[\s\S]*=======/);
+        assert.deepEqual(body.chunks.find((chunk) => chunk.text.includes("const safe = true;"))?.fg?.toInts(), [253, 164, 175, 255]);
+        assert.deepEqual(body.chunks.find((chunk) => chunk.text.includes("const safe = false;"))?.fg?.toInts(), [167, 243, 208, 255]);
+      };
+      check(updateView === "diff");
+      const frame = setup.captureCharFrame();
+      assert.ok(frame.indexOf("BEFORE_PANEL") < frame.indexOf("click for"));
+      assert.ok(frame.indexOf("click for") < frame.indexOf("AFTER_PANEL"));
+      assert.doesNotMatch(frame, /Snippet preview/);
+      assert.ok(header.y < code.y);
+      assert.equal(code.x, panel.x + 2);
+      assert.equal(code.width, panel.width - 2);
+      assert.deepEqual(code.backgroundColor.toInts(), [27, 37, 51, 255]);
+      await setup.mockMouse.click(header.x + 2, header.y); await setup.flush();
+      check(updateView !== "diff");
+      await assert.rejects(chat.apply(), /Use \/review before \/apply/);
+      assert.equal(await readFile(path.join(cwd, "example.js"), "utf8"), original);
+      assert.equal(requests, 1);
+      await setup.mockMouse.click(header.x + 2, header.y); await setup.flush();
+      check(updateView === "diff");
+      setup.resize(24, 60); await setup.flush();
+      assert.ok(hint.y > header.y);
+      assert.equal(hint.x, header.x);
+      setup.resize(140, 60); await setup.flush();
+      assert.equal(hint.y, header.y);
+      assert.equal(hint.x + hint.width, code.x + code.width);
+      // Panel styling follows a live theme change, and /new owns its disposal.
+      ui.input.setText("/theme dracula"); ui.input.gotoBufferEnd(); await setup.flush();
+      setup.mockInput.pressEnter(); await setup.flush();
+      assert.ok(code.backgroundColor.equals(parseColor(themePalette("dracula").panel)));
+      ui.input.setText("/new"); ui.input.gotoBufferEnd(); setup.mockInput.pressEnter();
+      await waitUntilIdle(ui); await setup.flush();
+      assert.ok(panel.isDestroyed && header.isDestroyed && body.isDestroyed);
+      assert.doesNotMatch(setup.captureCharFrame(), /BEFORE_PANEL|hiddenEffect/);
+    } finally { await setup.dispose(); await rm(cwd, { recursive: true, force: true }); }
+  });
+}
+
+test("fenced examples and malformed updates remain prose rather than interactive update panels", async () => {
+  const cwd = await mkdtemp(path.join(tmpdir(), "ask-tui-update-examples-"));
+  const setup = await createTestRenderer({ width: 120, height: 45, kittyKeyboard: true });
+  try {
+    const example = '<update path="a.ts">\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE\n</update>';
+    let response = `\`\`\`text\n${example}\n\`\`\``;
+    const client: ChatClient = { chat: { completions: { async create() {
+      return { id: "test", object: "chat.completion", created: 0, model: "test", choices: [
+        { index: 0, finish_reason: "stop", logprobs: null, message: { role: "assistant", refusal: null, content: response } },
+      ] };
+    } } } };
+    const chat = new TuiChat(client, { cwd });
+    const ui = mountChatUI(setup.renderer, chat, "test");
+    for (const answer of [response, `${example}\n<update path="incomplete">`]) {
+      response = answer;
+      ui.input.setText("Explain the format"); ui.input.gotoBufferEnd(); setup.mockInput.pressEnter();
+      await waitUntilIdle(ui); await setup.flush();
+      assert.ok(!ui.transcript.getChildren().some((node) => node.id.startsWith("update-")));
+      assert.equal(chat.pendingCount, 0);
+    }
+  } finally { await setup.dispose(); await rm(cwd, { recursive: true, force: true }); }
+});
+
 test("sensitive targets are flagged in the summary and review; startup notices appear in the transcript", async () => {
   const cwd = await mkdtemp(path.join(tmpdir(), "ask-tui-sensitive-"));
   const setup = await createTestRenderer({ width: 140, height: 45, kittyKeyboard: true });

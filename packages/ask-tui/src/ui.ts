@@ -1,5 +1,6 @@
 import type { CliRenderer, KeyEvent } from "@opentui/core";
 import { terminalField } from "@codehaus-au/ask/internal/terminal";
+import type { UpdateView } from "@codehaus-au/ask/internal/config";
 import { SkillResolutionError } from "@codehaus-au/ask/internal/skills";
 import { TuiChat } from "./chat.ts";
 import { themeModes, type ThemeMode } from "./themes.ts";
@@ -14,6 +15,7 @@ export { TUI_HELP } from "./commands.ts";
 export { SIDEBAR_MIN_WIDTH, SIDEBAR_MIN_COLUMNS, CHAT_MIN_COLUMNS } from "./layout.ts";
 export interface TuiUIOptions {
   readonly theme?: string;
+  readonly updateView?: UpdateView;
   readonly createClipboard?: ClipboardFactory;
   /** Startup warnings, shown in the transcript rather than written over the UI. */
   readonly notices?: readonly string[];
@@ -34,7 +36,7 @@ export function mountChatUI(renderer: CliRenderer, chat: TuiChat, model: string,
     onCursorChange: () => completion?.refresh(),
   });
   const { root, input, status, picker, transcript } = layout;
-  const view = createTranscript(renderer, transcript, theme);
+  const view = createTranscript(renderer, transcript, theme, options.updateView);
   const clipboard = createClipboardController(renderer, input, status, options.createClipboard);
   function paintTheme() { theme.paint(root); view.paintTheme(); }
   root.renderBefore = paintTheme;

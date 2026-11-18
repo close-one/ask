@@ -208,6 +208,21 @@ test("ASK_* variables are typed and validated; flags report their own names", as
   assert.throws(() => flagLayer([["--max-tokens", "-1", ["maxTokens"]]]), /Invalid --max-tokens: must be a positive integer/);
 });
 
+test("update block view is a validated, layered TUI preference", async (t) => {
+  const { global, project, env, write } = await sandbox(t);
+  assert.equal((await loadSettings({ cwd: project, env })).settings.tui.updateView, undefined);
+  await write(path.join(global, "tui.json"), { updateView: "diff" });
+  assert.equal((await loadSettings({ cwd: project, env })).settings.tui.updateView, "diff");
+  await write(path.join(project, ".ask", "tui.json"), { updateView: "search-replace" });
+  assert.equal((await loadSettings({ cwd: project, env })).settings.tui.updateView, "search-replace");
+  await write(path.join(project, ".ask", "tui.json"), { updateView: null });
+  assert.equal((await loadSettings({ cwd: project, env })).settings.tui.updateView, undefined);
+  for (const updateView of ["patch", true, 1]) {
+    await write(path.join(project, ".ask", "tui.json"), { updateView });
+    await assert.rejects(loadSettings({ cwd: project, env }), /updateView must be "search-replace" or "diff"/);
+  }
+});
+
 test("--show-config names every source and never prints the key", async (t) => {
   const { global, project, env, write } = await sandbox(t);
   await write(path.join(global, "ask.json"), { model: "m", endpoint: { apiKey: "sk-secret-value" } });

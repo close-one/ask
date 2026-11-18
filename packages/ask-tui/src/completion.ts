@@ -1,4 +1,4 @@
-import { StyledText, fg, type CliRenderer, type KeyEvent } from "@opentui/core";
+import { StyledText, bg, fg, type CliRenderer, type KeyEvent } from "@opentui/core";
 import { rankMatch } from "@codehaus-au/ask/internal/refs";
 import { terminalField } from "@codehaus-au/ask/internal/terminal";
 import type { SkillSummary } from "@codehaus-au/ask/internal/skills";
@@ -172,17 +172,24 @@ export function createCompletion(renderer: CliRenderer, chat: TuiChat, layout: C
         ...(hasFiles && !files.some((item) => item.kind === "detach")
           ? [matches.some((item) => item.kind === "detach") ? "  … more files (↑/↓)" : "  No matching files."] : []),
       ];
-    } else rows = [matches.length ? visible.map(renderItem).join("\n")
-      : mode === "mention" ? pickerError || "No indexed matches; you can still type an exact @path."
+    } else rows = matches.length ? visible.map(renderItem)
+      : [mode === "mention" ? pickerError || "No indexed matches; you can still type an exact @path."
         : mode === "skills" ? loadingSkills ? "Loading skills…" : skillLoadError || "No matching skills."
           : mode === "unskill" ? chat.activeSkillNames.length ? "No matching skills." : "No skills attached."
             : mode === "detach" ? hasFiles ? "No matching files." : "No files attached."
               : mode === "files" ? pickerError || "No matching files/folders."
                 : mode === "themes" ? "No matching themes." : "No matching commands."];
-    if (mode === "context") {
-      const actionRows = new Set(visible.map(renderItem));
-      pickerRows.content = new StyledText(rows.map((row, index) => fg(actionRows.has(row) ? "#82cfff" : "#e2e8f0")(row + (index < rows.length - 1 ? "\n" : ""))));
-    } else pickerRows.content = matches.length ? rows.join("\n") : new StyledText([fg("#e2e8f0")(rows.join("\n"))]);
+    const actionRows = new Set(visible.map(renderItem));
+    const selectedRow = matches[selected] ? renderItem(matches[selected]!) : undefined;
+    pickerRows.content = new StyledText(rows.flatMap((row, index) => {
+      // Original ask colors bind to theme roles in TuiTheme.paint(), so the
+      // accent background and contrasting text follow live theme previews.
+      const chunk = row === selectedRow
+        ? bg("#82cfff")(fg("#10151d")(row))
+        : fg(actionRows.has(row) ? "#82cfff" : "#e2e8f0")(row);
+      // Keep the newline outside the background span.
+      return index < rows.length - 1 ? [chunk, fg("#e2e8f0")("\n")] : [chunk];
+    }));
     picker.title = { mention: "Files / folders", commands: "Commands", detach: "Detach files / folders", unskill: "Remove skills", context: "Manage context", skills: "Select skills", files: "Select files / folders", themes: "Select theme" }[mode];
     pickerHint.content = mode === "mention" ? "↑↓ move · Enter/Tab select · Esc close"
       : mode === "commands" ? "↑↓ move · Enter run · Tab complete · Esc close"

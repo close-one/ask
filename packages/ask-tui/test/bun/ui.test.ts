@@ -308,7 +308,10 @@ test("context Add skills/files actions open selectors and attach locally without
       assert.ok(chunk, `missing neutral row: ${text}`);
       assert.deepEqual(chunk.fg?.toInts(), [226, 232, 240, 255]);
     }
-    assert.deepEqual(options.chunks.find((part) => part.text.includes("Add skills"))?.fg?.toInts(), [130, 207, 255, 255]);
+    const highlighted = options.chunks.find((part) => part.text.includes("Add skills"));
+    assert.deepEqual(highlighted?.fg?.toInts(), [16, 21, 29, 255]);
+    assert.deepEqual(highlighted?.bg?.toInts(), [130, 207, 255, 255]);
+    assert.deepEqual(options.chunks.find((part) => part.text.includes("Add files"))?.fg?.toInts(), [130, 207, 255, 255]);
     await draft("/context add files"); setup.mockInput.pressEnter(); await setup.flush();
     assert.equal(ui.input.plainText, "/attach ");
     assert.match(setup.captureCharFrame(), /Select files \/ folders/);

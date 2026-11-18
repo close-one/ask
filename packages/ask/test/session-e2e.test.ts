@@ -5,7 +5,7 @@
 
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -191,6 +191,65 @@ test("piped runs are one-shot: no history read, nothing written", async () => {
   } finally {
     await endpoint.close();
   }
+});
+
+test("/clear keeps files and skills, makes no request, and subsequent turns start fresh", async () => {
+  const endpoint = await stubEndpoint();
+  const { cwd, state } = await workspace();
+  const base = { cwd, state, url: endpoint.url };
+  try {
+    await mkdir(path.join(cwd, ".ask/skills/review"), { recursive: true });
+    await writeFile(path.join(cwd, ".ask/skills/review/SKILL.md"), "---\nname: review\n---\nREVIEW_SKILL_BODY");
+    await runCli(["/switch", "kept"], base);
+    await runCli(["--session", "kept", "--skill", "review", "@widget.ts OLD_QUESTION"], base);
+    const result = await runCli(["/clear"], base);
+    assert.match(result, /kept 1 reference\(s\) and 1 skill\(s\)/);
+    assert.equal(endpoint.requests.length, 1);
+    const shown = await runCli(["/session"], base);
+    assert.match(shown, /thread kept\s+0 turn\(s\)/);
+    assert.match(shown, /attachments: @widget.ts/);
+    assert.match(shown, /skills: review/);
+    assert.doesNotMatch(shown, /OLD_QUESTION|answer 1/);
+    await writeFile(path.join(cwd, "widget.ts"), "UPDATED_FILE_CONTENT\n");
+    await runCli(["--session", "kept", "fresh question"], base);
+    const fresh = endpoint.requests[1]!;
+    assert.deepEqual(fresh.messages.map((message) => message.role), ["system", "user"]);
+    assert.match(fresh.messages[0]!.content, /REVIEW_SKILL_BODY/);
+    assert.match(fresh.messages[1]!.content, /UPDATED_FILE_CONTENT/);
+    assert.doesNotMatch(JSON.stringify(fresh), /OLD_QUESTION|answer 1/);
+    await runCli(["--session", "kept", "follow up"], base);
+    assert.match(userMessages(endpoint.requests[2]!).at(-1)!, /UPDATED_FILE_CONTENT/);
+    await runCli(["--clear", "--session", "kept", "fresh again"], base);
+    assert.deepEqual(endpoint.requests[3]!.messages.map((message) => message.role), ["system", "user"]);
+    assert.match(userMessages(endpoint.requests[3]!).at(-1)!, /UPDATED_FILE_CONTENT/);
+    assert.match(endpoint.requests[3]!.messages[0]!.content, /REVIEW_SKILL_BODY/);
+    // /new and /reset must still remove context after clearing to zero turns.
+    for (const command of ["/new", "/reset"]) {
+      await runCli(["--session", "kept", "--skill", "review", "@widget.ts seed"], base);
+      await runCli(["/clear", "--session", "kept"], base);
+      await runCli([command, "--session", "kept"], base);
+      await runCli(["--session", "kept", "nothing attached"], base);
+      assert.doesNotMatch(JSON.stringify(endpoint.requests.at(-1)), /UPDATED_FILE_CONTENT|REVIEW_SKILL_BODY/);
+    }
+  } finally { await endpoint.close(); }
+});
+
+test("/clear respects disabled sessions and rejects conflicting reset commands", async () => {
+  const endpoint = await stubEndpoint();
+  const { cwd, state } = await workspace();
+  const base = { cwd, state, url: endpoint.url };
+  try {
+    await runCli(["/clear", "--session", "missing"], base);
+    assert.equal(endpoint.requests.length, 0);
+    await runCli(["--session", "kept", "@widget.ts original question"], base);
+    await runCli(["/clear", "--no-session", "--session", "kept"], base);
+    await runCli(["--session", "kept", "follow up"], base);
+    assert.equal(endpoint.requests[1]!.messages.filter((message) => message.role === "assistant").length, 1);
+    for (const flag of ["--new", "--reset", "--compact"]) {
+      await assert.rejects(runCli(["/clear", flag, "--session", "kept"], base), /cannot be combined/);
+    }
+    assert.equal(endpoint.requests.length, 2);
+  } finally { await endpoint.close(); }
 });
 
 test("/new archives the thread, /reset discards it", async () => {

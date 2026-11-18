@@ -25,6 +25,7 @@ export const OPTIONS = {
   "all-matches": { type: "boolean" },
   "include-secrets": { type: "boolean" },
   new: { type: "boolean" },
+  clear: { type: "boolean" },
   compact: { type: "boolean" },
   "install-completion": { type: "boolean" },
   apply: { type: "boolean" },
@@ -59,6 +60,7 @@ export const OPTIONS = {
  */
 export const VERBS: Readonly<Record<string, string>> = {
   "/new": "new",
+  "/clear": "clear",
   "/reset": "reset",
   "/session": "show-session",
   "/sessions": "list-sessions",

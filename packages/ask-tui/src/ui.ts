@@ -7,6 +7,7 @@ import { themeModes, type ThemeMode } from "./themes.ts";
 import { TuiTheme } from "./theme.ts";
 import { createChatLayout } from "./layout.ts";
 import { createTranscript } from "./transcript.ts";
+import type { UpdateAction } from "./update-panel.ts";
 import { createClipboardController, type ClipboardFactory } from "./clipboard.ts";
 import { createCompletion, type UIState } from "./completion.ts";
 import { dispatchCommand } from "./commands.ts";
@@ -67,6 +68,35 @@ export function mountChatUI(renderer: CliRenderer, chat: TuiChat, model: string,
   }
   completion = createCompletion(renderer, chat, layout, theme, state, { submit, refreshSummary, applyTheme, addText, themeChosen });
   const review = (paths: readonly string[]) => view.review(chat.reviewDetails(paths));
+  const syncUpdates = () => view.syncUpdates(chat.pendingReviews, state.working);
+  function readyStatus() {
+    status.content = chat.pendingCount ? `${chat.pendingCount} pending file(s) · /review to inspect · /apply to approve · /reject to discard` : "Ready · /help for commands";
+  }
+
+  async function updateAction(action: UpdateAction, path: string, turn: number) {
+    if (!state.alive || state.working || chat.sessionStats.turns !== turn) return;
+    state.working = true; syncUpdates();
+    try {
+      if (action === "review") view.review(chat.reviewDetails([path]), true);
+      else if (action === "cancel") chat.cancelReview([path]);
+      else if (action === "reject") {
+        const rejected = chat.reject([path]);
+        view.rejected(rejected);
+        addText(`Rejected ${JSON.stringify(rejected)}; nothing written.`);
+      } else {
+        const applied = await chat.apply([path]);
+        if (state.alive) view.applied(applied);
+        addText(`Applied updates to ${JSON.stringify(applied)}. Review with git diff.`, "#a7f3d0");
+      }
+      if (state.alive) readyStatus();
+    } catch (error) {
+      addText(error instanceof Error ? error.message : String(error), "#fda4af");
+      if (state.alive) status.content = "Edit action failed";
+    } finally {
+      state.working = false;
+      if (state.alive) { syncUpdates(); completion!.refresh(); refreshSummary(); }
+    }
+  }
 
   async function submit() {
     if (state.working || !state.alive) return;
@@ -74,10 +104,12 @@ export function mountChatUI(renderer: CliRenderer, chat: TuiChat, model: string,
     if (!text) return;
     clipboard.submitted();
     state.working = true; picker.visible = false; input.setText("");
+    syncUpdates();
     let timer: ReturnType<typeof setInterval> | undefined;
     try {
       const command = await dispatchCommand(text, chat, {
-        quit: () => renderer.destroy(), clear: view.clear, review, copy: clipboard.copyText,
+        quit: () => renderer.destroy(), clear: view.clear, review, rejected: view.rejected,
+        applied: (paths) => { if (state.alive) view.applied(paths); }, copy: clipboard.copyText,
         addText, openManager: (mode, query) => completion!.openManager(mode, query),
       });
       if (command === "return" || !state.alive) return;
@@ -95,13 +127,14 @@ export function mountChatUI(renderer: CliRenderer, chat: TuiChat, model: string,
           const limit = chat.sessionStats.contextWindow === null ? "the default history cap (set --context-window to use your model's limit)" : "the context window";
           addText(`Dropped the ${reply.historyDropped} oldest history message(s) to fit ${limit}. Attached files are still sent in full.`, "#fcd34d");
         }
-        view.addAnswer(reply.text);
+        const turn = chat.sessionStats.turns;
+        view.addAnswer(reply.text, chat.pendingCount ? chat.previewDetails() : [], (action, path) => { void updateAction(action, path, turn); });
         if (reply.context.skipped.length) addText(`Skipped context: ${reply.context.skipped.map((item) => `${terminalField(item.path)} (${item.reason})`).join(", ")}`, "#fcd34d");
         if (reply.context.truncated) addText("Context was truncated; truncated files cannot be updated.", "#fcd34d");
         if (reply.proposalError) addText(`Edits unavailable: ${reply.proposalError}`, "#fcd34d");
         if (chat.pendingCount) view.proposals(chat.pendingSummary);
       }
-      if (state.alive) status.content = chat.pendingCount ? `${chat.pendingCount} pending file(s) · /review to inspect · /apply to approve · /reject to discard` : "Ready · /help for commands";
+      if (state.alive) readyStatus();
     } catch (error) {
       if (state.alive) {
         addText(error instanceof Error ? error.message : String(error), "#fda4af");
@@ -112,7 +145,7 @@ export function mountChatUI(renderer: CliRenderer, chat: TuiChat, model: string,
     } finally {
       if (timer) clearInterval(timer);
       state.working = false;
-      if (state.alive) { input.focus(); completion!.refresh(); refreshSummary(); }
+      if (state.alive) { syncUpdates(); input.focus(); completion!.refresh(); refreshSummary(); }
     }
   }
 

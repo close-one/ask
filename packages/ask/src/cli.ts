@@ -80,6 +80,7 @@ import {
   appendTurn,
   applyCompaction,
   archiveSession,
+  clearSession,
   isValidSessionName,
   listSessions,
   resolveSessionName,
@@ -111,7 +112,7 @@ const USAGE = `ask — one-shot LLM question with file/directory context
 
 Usage
   ask [options] '<prompt with @file, @dir, @glob or @search references>'
-  ask /new | /reset | /session
+  ask /new | /clear | /reset | /session
   <command> | ask [options] '<prompt>'
 
 Editing a file
@@ -134,6 +135,8 @@ Sessions
 
   ask /new '<prompt>'    file the thread away, start fresh, then ask
   ask /new               file the thread away and start fresh
+  ask /clear             clear history, keeping attached references and skills
+  ask /clear '<prompt>'  clear history, keep context, then ask
   ask /reset             throw the current thread away
   ask /session           show the current thread, no API call
   ask /sessions          list the threads for this repository
@@ -191,6 +194,7 @@ Options
       --all-matches         attach every search match instead of the best one
       --include-secrets     do not skip .env / *.pem / key-ish files
       --new                 alias of /new
+      --clear               alias of /clear
       --reset               alias of /reset
       --show-session        alias of /session
       --list-sessions       alias of /sessions
@@ -384,7 +388,7 @@ function formatCount(value: number): string {
 
 /** Print a session without calling the API. */
 function printSession(session: Session | null, file: string, paint: Palette): void {
-  if (!session || session.turns.length === 0) {
+  if (!session) {
     process.stdout.write(`no active thread\n${paint.dim(`(would be stored at ${terminalField(file)})`)}\n`);
     return;
   }
@@ -405,6 +409,12 @@ function printSession(session: Session | null, file: string, paint: Palette): vo
   );
 
   let total = 0;
+  if (session.context) {
+    process.stdout.write(
+      `attachments: ${sessionRefs(session).map((ref) => `@${terminalField(ref)}`).join(" ") || "none"}\n` +
+      `skills: ${sessionSkills(session).map(terminalField).join(", ") || "none"}\n`,
+    );
+  }
   session.turns.forEach((turn, index) => {
     const refs = turn.refs.length > 0 ? `  [${turn.refs.map((ref) => `@${terminalField(ref)}`).join(" ")}]` : "";
     const answer = terminalField(turn.answer);
@@ -528,7 +538,7 @@ async function printSessions(scope: string, active: string, paint: Palette): Pro
   process.stdout.write(
     paint.dim(
       `\n* = active. Switch with 'ask /switch <name>'.\n` +
-        `/new files the current thread away, /reset throws it away.\n`,
+        `/clear removes history but keeps context; /new files the thread away; /reset throws it away.\n`,
     ),
   );
 }
@@ -767,12 +777,17 @@ async function main(argv: string[]): Promise<number> {
   const needsScope =
     sessionsOn ||
     bool("new") ||
+    bool("clear") ||
     bool("reset") ||
     bool("show-session") ||
     bool("list-sessions") ||
     bool("compact") ||
     switchTo !== undefined;
   const scope = needsScope ? await sessionScope(process.cwd()) : process.cwd();
+
+  if (bool("clear") && (bool("new") || bool("reset") || bool("compact"))) {
+    throw new UsageError("/clear cannot be combined with /new, /reset or /compact");
+  }
 
   if (switchTo !== undefined) {
     if (!isValidSessionName(switchTo)) {
@@ -795,6 +810,13 @@ async function main(argv: string[]): Promise<number> {
   if (bool("list-sessions")) {
     await printSessions(scope, sessionName, colour);
     return 0;
+  }
+
+  if (bool("clear")) {
+    const cleared = sessionsDisabled ? null : await clearSession(sessionKey);
+    if (!bool("quiet")) status.note(cleared
+      ? `-- cleared conversation history; kept ${sessionRefs(cleared).length} reference(s) and ${sessionSkills(cleared).length} skill(s)`
+      : "-- no thread to clear");
   }
 
   // /new files the thread away and starts fresh; /reset throws it away.
@@ -913,8 +935,8 @@ async function main(argv: string[]): Promise<number> {
   }
 
   if (turnRefs.length === 0 && !question && !stdinText) {
-    // `ask /new` or `ask /switch x` on their own are complete commands.
-    if (bool("new") || bool("reset") || switchTo !== undefined) return 0;
+    // Thread-management verbs on their own are complete commands.
+    if (bool("new") || bool("clear") || bool("reset") || switchTo !== undefined) return 0;
     throw new UsageError("nothing to ask: give a prompt, an @path, or pipe stdin");
   }
 

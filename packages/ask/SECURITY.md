@@ -156,7 +156,11 @@ This is the tool's only persistent state, and its only write.
 - **Compaction**: `ask /compact` sends the thread to the model once and replaces
   it with the summary. The prior thread is kept alongside as
   `<hash>.pre-compact.json`, same permissions, removed by `ask /new`.
-- **Clearing**: `ask /new`, or delete the files. `--no-session` / `ASK_SESSION=0`
+- **Clearing**: `ask /clear` removes current questions, answers and the
+  pre-compaction backup while retaining reference and skill names separately from
+  turns. It does not call the model unless a prompt is supplied. `ask /reset`
+  removes the current thread and its retained context; `/new` archives its turns
+  and starts fresh. `--no-session` / `ASK_SESSION=0`
   disables the feature entirely; piped and scripted runs never use it.
 
 Sessions do not change the one-request property: each invocation still issues

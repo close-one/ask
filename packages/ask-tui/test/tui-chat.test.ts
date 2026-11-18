@@ -130,6 +130,47 @@ test("TUI skills are explicitly selected, composed in system instructions, and r
   } finally { await rm(cwd, { recursive: true, force: true }); }
 });
 
+test("clearConversation drops history and reviewed edits while retaining context and settings", async () => {
+  const cwd = await mkdtemp(path.join(tmpdir(), "ask-tui-clear-"));
+  try {
+    await mkdir(path.join(cwd, "src"));
+    await mkdir(path.join(cwd, "skills"));
+    await writeFile(path.join(cwd, "src/a.ts"), "old\n");
+    await writeFile(path.join(cwd, "src/excluded.ts"), "EXCLUDED_CONTENT");
+    await writeFile(path.join(cwd, "skills/review.md"), "---\nname: review\n---\nSKILL_BODY");
+    const { client, requests } = clientWith([
+      { text: block("src/a.ts", "old", "new"), usage: { prompt_tokens: 50, completion_tokens: 20 } },
+      { text: "Fresh answer" },
+    ]);
+    const chat = new TuiChat(client, { cwd, skillRoots: [path.join(cwd, "skills")], system: "CUSTOM_SYSTEM", contextWindow: 5000 });
+    await chat.attach("src");
+    chat.detach("src/excluded.ts");
+    await chat.selectSkills(["review"]);
+    await chat.submit("OLD_QUESTION");
+    chat.review();
+    chat.clearConversation();
+    assert.equal(requests.length, 1);
+    assert.equal(chat.lastAnswer, null);
+    assert.equal(chat.pendingCount, 0);
+    await assert.rejects(chat.apply(), /No pending edits/);
+    assert.deepEqual(chat.attachmentPaths, ["src"]);
+    assert.deepEqual(chat.excludedFilePaths, ["src/excluded.ts"]);
+    assert.deepEqual(chat.activeSkillNames, ["review"]);
+    assert.deepEqual(chat.sessionStats, {
+      cwd, turns: 0, contextWindow: 5000, lastInput: null, lastOutput: null,
+      totalInput: 0, totalOutput: 0, inputTurns: 0, outputTurns: 0, files: ["src/a.ts"],
+    });
+    assert.equal(await readFile(path.join(cwd, "src/a.ts"), "utf8"), "old\n");
+    await writeFile(path.join(cwd, "src/a.ts"), "REFRESHED_CONTENT");
+    await chat.submit("NEW_QUESTION");
+    const request = requests[1]!;
+    assert.deepEqual(request.messages.map((message) => message.role), ["system", "user"]);
+    assert.match(String(request.messages[0]!.content), /CUSTOM_SYSTEM[\s\S]*SKILL_BODY/);
+    assert.match(String(request.messages[1]!.content), /NEW_QUESTION[\s\S]*REFRESHED_CONTENT/);
+    assert.doesNotMatch(JSON.stringify(request), /OLD_QUESTION|EXCLUDED_CONTENT|Local edit decision/);
+  } finally { await rm(cwd, { recursive: true, force: true }); }
+});
+
 test("ambiguous, missing and oversized skill selections fail without requests or partial selection", async () => {
   const cwd = await mkdtemp(path.join(tmpdir(), "ask-tui-skills-"));
   try {
@@ -380,6 +421,7 @@ test("in-flight submissions are rejected without an extra request", async () => 
     const chat = new TuiChat(client, { cwd });
     const pending = chat.submit("hello");
     await assert.rejects(chat.submit("again"), /in progress/);
+    assert.throws(() => chat.clearConversation(), /in progress/);
     // Allow asynchronous context collection to reach the mock transport.
     while (!resolve) await new Promise((done) => setImmediate(done));
     resolve({ id: "test", object: "chat.completion", created: 0, model: "test",
@@ -436,6 +478,12 @@ test("review, apply and reject work per file; unreviewed files cannot be applied
     assert.throws(() => chat.reject(), /No pending edits/);
     await chat.submit("Fix @a.ts @b.ts @c.ts");
     assert.deepEqual(chat.pendingSummary.map((file) => [file.path, file.added, file.removed]), [["a.ts", 1, 1], ["b.ts", 1, 1], ["c.ts", 1, 1]]);
+    const preview = chat.previewDetails(["a.ts"]);
+    await assert.rejects(chat.apply(["a.ts"]), /Not yet reviewed: "a.ts"/);
+    assert.deepEqual(chat.reviewDetails(["a.ts"]), preview);
+    chat.cancelReview(["a.ts"]);
+    await assert.rejects(chat.apply(["a.ts"]), /Not yet reviewed: "a.ts"/);
+    assert.equal(chat.pendingCount, 3, "cancel keeps the proposal pending");
     chat.review(["a.ts"]);
     await assert.rejects(chat.apply(), /Not yet reviewed: "b.ts", "c.ts"/);
     await assert.rejects(chat.apply(["b.ts"]), /Not yet reviewed: "b.ts"/);

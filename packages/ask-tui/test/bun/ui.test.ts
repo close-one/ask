@@ -565,6 +565,46 @@ test("Ctrl+V and Command/Super+V paste; Command+C copies without ever exiting", 
   }
 });
 
+for (const method of ["native", "ctrl", "super"] as const) {
+  test(`${method} paste preserves mentions and attaches files only on submission`, async (t) => {
+    localClipboardEnvironment(t);
+    const cwd = await mkdtemp(path.join(tmpdir(), "ask-tui-pasted-mentions-"));
+    const setup = await createTestRenderer({ width: 110, height: 35, kittyKeyboard: true, remote: false });
+    try {
+      await writeFile(path.join(cwd, "a.ts"), "FIRST_ATTACHMENT");
+      await writeFile(path.join(cwd, "b c.ts"), "SECOND_ATTACHMENT");
+      const prompt = 'Compare @a.ts and @"b c.ts"\nTreat \\@literal and me@host as text please';
+      const requests: OneShotRequest[] = [];
+      const client: ChatClient = { chat: { completions: { async create(request) {
+        requests.push(request);
+        return { id: "test", object: "chat.completion", created: 0, model: "test", choices: [
+          { index: 0, finish_reason: "stop", logprobs: null, message: { role: "assistant", refusal: null, content: "Compared." } },
+        ] };
+      } } } };
+      const chat = new TuiChat(client, { cwd });
+      const ui = mountChatUI(setup.renderer, chat, "test", {
+        createClipboard: () => ({
+          async read() { return { status: "read", representation: { mimeType: "text/plain", bytes: new TextEncoder().encode(prompt) } }; },
+          async dispose() {},
+        }),
+      });
+      if (method === "native") await setup.mockInput.pasteBracketedText(prompt);
+      else setup.mockInput.pressKey("v", { [method]: true });
+      await waitUntilIdle(ui); await setup.flush();
+      assert.equal(ui.input.plainText, prompt);
+      assert.equal(requests.length, 0);
+      assert.deepEqual(chat.attachmentPaths, []);
+      setup.mockInput.pressEnter(); await waitUntilIdle(ui); await setup.flush();
+      assert.equal(requests.length, 1);
+      assert.deepEqual([...chat.sessionStats.files].sort(), ["a.ts", "b c.ts"]);
+      const message = String(requests[0]!.messages.at(-1)!.content);
+      assert.match(message, /FIRST_ATTACHMENT/);
+      assert.match(message, /SECOND_ATTACHMENT/);
+      assert.match(message, /Treat @literal and me@host as text/);
+    } finally { await setup.dispose(); await rm(cwd, { recursive: true, force: true }); }
+  });
+}
+
 test("delayed paste does not overwrite an edited draft and is cancelled on exit", async (t) => {
   localClipboardEnvironment(t);
   const cwd = await mkdtemp(path.join(tmpdir(), "ask-tui-paste-race-"));
@@ -1369,6 +1409,79 @@ test("context cwd/session metadata stays visible but is never selectable", async
   }
 });
 
+test("transcript scrollbar spacing is reserved only while content overflows", async () => {
+  const cwd = await mkdtemp(path.join(tmpdir(), "ask-tui-scrollbar-gap-"));
+  const setup = await createTestRenderer({ width: 110, height: 35, kittyKeyboard: true });
+  try {
+    const client: ChatClient = { chat: { completions: { async create() { throw new Error("must not ask"); } } } };
+    const ui = mountChatUI(setup.renderer, new TuiChat(client, { cwd }), "test");
+    await setup.flush();
+    assert.equal(ui.transcript.verticalScrollBar.visible, false);
+    assert.equal(ui.transcript.content.width, ui.transcript.width);
+    const text = new TextRenderable(setup.renderer, {
+      content: Array.from({ length: 60 }, (_, index) => `Line ${index}`).join("\n"), width: "100%", flexShrink: 0,
+    });
+    ui.transcript.add(text); await setup.flush();
+    assert.equal(ui.transcript.verticalScrollBar.visible, true);
+    assert.equal(ui.transcript.verticalScrollBar.width, 3, "one scrollbar column plus two gap columns");
+    assert.equal(text.width, ui.transcript.width - 3);
+    setup.resize(110, 100); await setup.flush();
+    assert.equal(ui.transcript.verticalScrollBar.visible, false);
+    assert.equal(text.width, ui.transcript.width);
+    setup.resize(110, 35); await setup.flush();
+    assert.equal(ui.transcript.verticalScrollBar.visible, true);
+    assert.equal(text.width, ui.transcript.width - 3);
+    ui.input.setText("/clear"); ui.input.gotoBufferEnd(); setup.mockInput.pressEnter();
+    await waitUntilIdle(ui); await setup.flush();
+    assert.equal(ui.transcript.verticalScrollBar.visible, false);
+    assert.equal(ui.transcript.content.width, ui.transcript.width);
+  } finally { await setup.dispose(); await rm(cwd, { recursive: true, force: true }); }
+});
+
+test("/clear clears the transcript and proposals while retaining attachments, skills and theme", async () => {
+  const cwd = await mkdtemp(path.join(tmpdir(), "ask-tui-clear-ui-"));
+  const setup = await createTestRenderer({ width: 120, height: 45, kittyKeyboard: true });
+  try {
+    await writeFile(path.join(cwd, "example.ts"), "old\n");
+    await mkdir(path.join(cwd, "skills"));
+    await writeFile(path.join(cwd, "skills/review.md"), "---\nname: review\n---\nReview instructions");
+    let requests = 0;
+    const client: ChatClient = { chat: { completions: { async create() {
+      requests++;
+      return { id: "test", object: "chat.completion", created: 0, model: "test", choices: [
+        { index: 0, finish_reason: "stop", logprobs: null, message: { role: "assistant", refusal: null,
+          content: 'OLD_RESPONSE\n<update path="example.ts">\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE\n</update>' } },
+      ] };
+    } } } };
+    const chat = new TuiChat(client, { cwd, skillRoots: [path.join(cwd, "skills")] });
+    await chat.selectSkills(["review"]);
+    const ui = mountChatUI(setup.renderer, chat, "test", { theme: "dracula" });
+    ui.input.setText("OLD_PROMPT @example.ts please"); ui.input.gotoBufferEnd(); setup.mockInput.pressEnter();
+    await waitUntilIdle(ui); await setup.flush();
+    assert.equal(chat.pendingCount, 1);
+    const oldNodes = [...ui.transcript.getChildren()];
+    ui.input.setText("/cle"); ui.input.gotoBufferEnd(); await setup.flush();
+    assert.match(popupRows(ui.picker).plainText, /\/clear/);
+    setup.mockInput.pressEnter(); await waitUntilIdle(ui); await setup.flush();
+    assert.ok(oldNodes.every((node) => node.isDestroyed));
+    assert.doesNotMatch(setup.captureCharFrame(), /OLD_PROMPT|OLD_RESPONSE/);
+    assert.match(setup.captureCharFrame(), /attachments and skills kept/);
+    assert.deepEqual(chat.attachmentPaths, ["example.ts"]);
+    assert.deepEqual(chat.activeSkillNames, ["review"]);
+    assert.deepEqual(ui.theme, { name: "dracula", mode: "dark" });
+    assert.equal(chat.lastAnswer, null);
+    assert.equal(chat.pendingCount, 0);
+    assert.equal(chat.sessionStats.turns, 0);
+    assert.equal(requests, 1);
+    assert.equal(await readFile(path.join(cwd, "example.ts"), "utf8"), "old\n");
+    ui.input.setText("/new"); ui.input.gotoBufferEnd(); setup.mockInput.pressEnter();
+    await waitUntilIdle(ui); await setup.flush();
+    assert.deepEqual(chat.attachmentPaths, []);
+    assert.deepEqual(chat.activeSkillNames, []);
+    assert.equal(requests, 1);
+  } finally { await setup.dispose(); await rm(cwd, { recursive: true, force: true }); }
+});
+
 test("OpenTUI composer completes mentions, submits once, reviews and applies locally", async () => {
   const cwd = await mkdtemp(path.join(tmpdir(), "ask-tui-ui-"));
   const setup = await createTestRenderer({ width: 100, height: 35, kittyKeyboard: true });
@@ -1405,7 +1518,7 @@ test("OpenTUI composer completes mentions, submits once, reviews and applies loc
     const summary = setup.captureCharFrame();
     assert.match(summary, /example\.ts\s+\+1 -1/);
     assert.match(summary, /\/review/);
-    assert.doesNotMatch(summary, /\+const a = 2;/, "diffs are shown on /review, not automatically");
+    assert.match(summary, /\+const a = 2;/, "diffs are previewed by default, but still require explicit review");
     assert.equal(await readFile(path.join(cwd, "example.ts"), "utf8"), "const a = 1;\n");
     // Applying before reviewing is refused and writes nothing.
     await setup.mockInput.typeText("/apply");
@@ -1517,7 +1630,7 @@ for (const updateView of ["search-replace", "diff"] as const) {
       assert.ok(header.y < code.y);
       assert.equal(code.x, panel.x + 2);
       assert.equal(code.width, panel.width - 2);
-      assert.deepEqual(code.backgroundColor.toInts(), [27, 37, 51, 255]);
+      assert.equal(code.backgroundColor.toInts()[3], 0);
       await setup.mockMouse.click(header.x + 2, header.y); await setup.flush();
       check(updateView !== "diff");
       await assert.rejects(chat.apply(), /Use \/review before \/apply/);
@@ -1534,12 +1647,229 @@ for (const updateView of ["search-replace", "diff"] as const) {
       // Panel styling follows a live theme change, and /new owns its disposal.
       ui.input.setText("/theme dracula"); ui.input.gotoBufferEnd(); await setup.flush();
       setup.mockInput.pressEnter(); await setup.flush();
-      assert.ok(code.backgroundColor.equals(parseColor(themePalette("dracula").panel)));
+      assert.ok(code.borderColor.equals(parseColor(themePalette("dracula").border)));
+      assert.equal(code.backgroundColor.toInts()[3], 0);
       ui.input.setText("/new"); ui.input.gotoBufferEnd(); setup.mockInput.pressEnter();
       await waitUntilIdle(ui); await setup.flush();
       assert.ok(panel.isDestroyed && header.isDestroyed && body.isDestroyed);
       assert.doesNotMatch(setup.captureCharFrame(), /BEFORE_PANEL|hiddenEffect/);
     } finally { await setup.dispose(); await rm(cwd, { recursive: true, force: true }); }
+  });
+}
+
+test("update actions share per-file review, cancel, apply and reject state with commands", async () => {
+  const cwd = await mkdtemp(path.join(tmpdir(), "ask-tui-update-actions-"));
+  const setup = await createTestRenderer({ width: 140, height: 100, kittyKeyboard: true });
+  try {
+    const original = "context line\nold one\nold two\n";
+    await writeFile(path.join(cwd, "a.ts"), original);
+    await writeFile(path.join(cwd, "b.ts"), "old\n");
+    const block = (file: string, before: string, after: string) => `<update path="${file}">\n<<<<<<< SEARCH\n${before}\n=======\n${after}\n>>>>>>> REPLACE\n</update>`;
+    let response = [block("a.ts", "old one", "new one"), block("a.ts", "old two", "new two"), block("b.ts", "old", "new")].join("\n");
+    let requests = 0;
+    const client: ChatClient = { chat: { completions: { async create() {
+      requests++;
+      return { id: "test", object: "chat.completion", created: 0, model: "test", choices: [
+        { index: 0, finish_reason: "stop", logprobs: null, message: { role: "assistant", refusal: null, content: response } },
+      ] };
+    } } } };
+    const chat = new TuiChat(client, { cwd });
+    const ui = mountChatUI(setup.renderer, chat, "test");
+    async function send(text: string) {
+      ui.input.setText(text); ui.input.gotoBufferEnd(); setup.mockInput.pressEnter();
+      await waitUntilIdle(ui); await setup.flush();
+    }
+    function node(parent: Renderable, suffix: string): Renderable {
+      const found = find(parent, suffix);
+      assert.ok(found, `Missing ${suffix}`);
+      return found;
+    }
+    function find(parent: Renderable, suffix: string): Renderable | undefined {
+      for (const child of parent.getChildren()) {
+        if (child.id.endsWith(suffix)) return child;
+        const found = find(child, suffix);
+        if (found) return found;
+      }
+      return undefined;
+    }
+    async function click(panel: Renderable, action: string) {
+      const button = node(panel, `-${action}`);
+      assert.ok(button.visible);
+      await setup.mockMouse.click(button.x + 2, button.y);
+      await waitUntilIdle(ui); await setup.flush();
+    }
+    await send("Fix @a.ts @b.ts");
+    const panels = ui.transcript.getChildren().filter((child) => child.id.startsWith("update-"));
+    assert.equal(panels.length, 3);
+    const [first, second, other] = panels as [Renderable, Renderable, Renderable];
+    for (const panel of panels) {
+      assert.ok(node(panel, "-actions").visible && node(panel, "-review").visible && node(panel, "-reject").visible);
+      assert.ok(!node(panel, "-apply").visible);
+      const code = node(panel, "-block");
+      const review = node(panel, "-review");
+      const row = node(panel, "-actions");
+      assert.ok(row.y > node(panel, "-code").y);
+      assert.equal(row.y + row.height, code.y + code.height - 1);
+      assert.equal(review.x, code.x + 2);
+    }
+    ui.input.setText("keep my draft");
+    const content = (panel: Renderable) => (node(panel, "-code") as TextRenderable).chunks.map((chunk) => chunk.text).join("");
+    const preview = content(first);
+    assert.equal(content(second), preview, "both blocks preview every edit to the same file");
+    assert.equal(preview, chat.previewDetails(["a.ts"])[0]!.diff);
+    await assert.rejects(chat.apply(["a.ts"]), /Use \/review before \/apply/);
+    const reviewPosition = { x: node(first, "-review").x + 2, y: node(first, "-review").y };
+    await click(first, "review");
+    await setup.mockMouse.click(reviewPosition.x, reviewPosition.y); await setup.flush();
+    assert.equal(await readFile(path.join(cwd, "a.ts"), "utf8"), original, "a second click at Review must not apply");
+    for (const panel of [first, second]) {
+      assert.ok(node(panel, "-apply").visible && node(panel, "-cancel").visible);
+      assert.ok(!node(panel, "-review").visible && !node(panel, "-reject").visible);
+      const code = node(panel, "-block");
+      const cancel = node(panel, "-cancel");
+      const guidance = node(panel, "-guidance");
+      const row = node(panel, "-actions");
+      assert.ok(row.y > node(panel, "-code").y);
+      assert.equal(row.y + row.height, code.y + code.height - 1);
+      assert.equal(cancel.x + cancel.width, code.x + code.width - 2);
+      assert.equal(guidance.x, code.x + 2);
+      assert.equal(guidance.y, cancel.y);
+      const body = node(panel, "-code") as TextRenderable;
+      const text = body.chunks.map((chunk) => chunk.text).join("");
+      assert.equal(text, preview, "Review must not change the displayed diff");
+      assert.match(text, /context line/);
+      assert.match(text, /\+new one/); assert.match(text, /\+new two/);
+    }
+    assert.match(setup.captureCharFrame(), /Apply will modify this file/);
+    assert.ok(node(other, "-review").visible);
+    assert.equal(await readFile(path.join(cwd, "a.ts"), "utf8"), original);
+    await click(second, "cancel");
+    assert.equal(content(first), preview, "Cancel retains the same diff preview");
+    assert.ok(node(first, "-review").visible && node(second, "-review").visible);
+    await assert.rejects(chat.apply(["a.ts"]), /Use \/review before \/apply/);
+    assert.equal(chat.pendingCount, 2);
+    assert.equal(ui.input.plainText, "keep my draft");
+    await click(first, "review");
+    await click(first, "apply");
+    assert.equal(await readFile(path.join(cwd, "a.ts"), "utf8"), "context line\nnew one\nnew two\n");
+    for (const panel of [first, second]) {
+      assert.ok(node(panel, "-actions").visible && node(panel, "-applied").visible);
+      assert.ok(!node(panel, "-buttons").visible);
+      assert.equal((node(panel, "-applied") as TextRenderable).plainText, "Applied");
+    }
+    assert.equal(chat.pendingCount, 1);
+    await click(other, "reject");
+    assert.equal(await readFile(path.join(cwd, "b.ts"), "utf8"), "old\n");
+    assert.equal(chat.pendingCount, 0);
+    assert.ok(node(other, "-actions").visible && node(other, "-rejected").visible);
+    assert.ok(!node(other, "-buttons").visible);
+    assert.equal((node(other, "-rejected") as TextRenderable).plainText, "Rejected");
+    assert.equal(requests, 1);
+    // A new proposal for the same path must never revive old response buttons.
+    response = block("a.ts", "new one", "final one");
+    await send("Improve it again");
+    const latest = ui.transcript.getChildren().filter((child) => child.id.startsWith("update-")).at(-1)!;
+    const latestPreview = content(latest);
+    await send("/review a.ts");
+    assert.equal(content(latest), latestPreview, "/review uses the same preview diff");
+    assert.ok(node(latest, "-apply").visible);
+    assert.ok(node(first, "-applied").visible && !node(first, "-buttons").visible);
+    await send("/apply a.ts");
+    assert.ok(node(latest, "-applied").visible && !node(latest, "-buttons").visible);
+    assert.equal(await readFile(path.join(cwd, "a.ts"), "utf8"), "context line\nfinal one\nnew two\n");
+    assert.equal(requests, 2);
+    assert.ok(node(other, "-rejected").visible, "rejection remains visible in earlier responses");
+    response = block("b.ts", "old", "new");
+    await send("Try another change");
+    const last = ui.transcript.getChildren().filter((child) => child.id.startsWith("update-")).at(-1)!;
+    await send("/review b.ts");
+    await send("/reject b.ts");
+    assert.ok(node(last, "-actions").visible && node(last, "-rejected").visible);
+    assert.ok(!node(last, "-buttons").visible && !node(last, "-guidance").visible);
+    assert.equal(await readFile(path.join(cwd, "b.ts"), "utf8"), "old\n");
+  } finally { await setup.dispose(); await rm(cwd, { recursive: true, force: true }); }
+});
+
+test("conflicting, unmatched and incomplete proposals have no block actions", async () => {
+  const cwd = await mkdtemp(path.join(tmpdir(), "ask-tui-update-conflicts-"));
+  const setup = await createTestRenderer({ width: 120, height: 60, kittyKeyboard: true });
+  try {
+    await writeFile(path.join(cwd, "a.ts"), "old\n");
+    const block = (search: string) => `<update path="a.ts">\n<<<<<<< SEARCH\n${search}\n=======\nnew\n>>>>>>> REPLACE\n</update>`;
+    let response = "";
+    let finish: "stop" | "length" = "stop";
+    const client: ChatClient = { chat: { completions: { async create() {
+      return { id: "test", object: "chat.completion", created: 0, model: "test", choices: [
+        { index: 0, finish_reason: finish, logprobs: null, message: { role: "assistant", refusal: null, content: response } },
+      ] };
+    } } } };
+    const chat = new TuiChat(client, { cwd });
+    const ui = mountChatUI(setup.renderer, chat, "test");
+    for (const [text, reason] of [[`${block("old")}\n${block("old")}`, "stop"], [block("missing"), "stop"], [block("old"), "length"]] as const) {
+      response = text; finish = reason;
+      ui.input.setText("Fix @a.ts"); ui.input.gotoBufferEnd(); setup.mockInput.pressEnter();
+      await waitUntilIdle(ui); await setup.flush();
+      assert.equal(chat.pendingCount, 0);
+      const panels = ui.transcript.getChildren().filter((child) => child.id.startsWith("update-"));
+      assert.ok(panels.length);
+      for (const panel of panels) {
+        const code = panel.getChildren().find((child) => child.id.endsWith("-block"))!;
+        assert.equal(code.getChildren().find((child) => child.id.endsWith("-actions"))!.visible, false);
+        const header = panel.getChildren().find((child) => child.id.endsWith("-toggle"))!;
+        assert.equal(header.getChildren().find((child) => child.id.endsWith("-hint"))!.visible, false);
+      }
+    }
+    assert.equal(await readFile(path.join(cwd, "a.ts"), "utf8"), "old\n");
+  } finally { await setup.dispose(); await rm(cwd, { recursive: true, force: true }); }
+});
+
+for (const stale of [false, true]) {
+  test(`inline apply guards duplicate clicks and ${stale ? "refuses stale files" : "writes reviewed bytes"}`, async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "ask-tui-inline-apply-"));
+    const setup = await createTestRenderer({ width: 140, height: 60, kittyKeyboard: true });
+    let release: (() => void) | undefined;
+    try {
+      const original = "const safe = true;\n";
+      const replacement = "const safe = false; /*\x1b]0;*/hiddenEffect();/*\x07*/";
+      await writeFile(path.join(cwd, "example.js"), original);
+      const client: ChatClient = { chat: { completions: { async create() {
+        return { id: "test", object: "chat.completion", created: 0, model: "test", choices: [
+          { index: 0, finish_reason: "stop", logprobs: null, message: { role: "assistant", refusal: null,
+            content: `<update path="example.js">\n<<<<<<< SEARCH\n${original.trimEnd()}\n=======\n${replacement}\n>>>>>>> REPLACE\n</update>` } },
+        ] };
+      } } } };
+      const chat = new TuiChat(client, { cwd });
+      const ui = mountChatUI(setup.renderer, chat, "test");
+      ui.input.setText("Fix @example.js"); ui.input.gotoBufferEnd(); setup.mockInput.pressEnter();
+      await waitUntilIdle(ui); await setup.flush();
+      const panel = ui.transcript.getChildren().find((child) => child.id.startsWith("update-"))!;
+      const code = panel.getChildren().find((child) => child.id.endsWith("-block"))!;
+      const row = code.getChildren().find((child) => child.id.endsWith("-actions"))!;
+      const buttons = row.getChildren().find((child) => child.id.endsWith("-buttons"))!;
+      const review = buttons.getChildren().find((child) => child.id.endsWith("-review"))!;
+      await setup.mockMouse.click(review.x + 2, review.y); await setup.flush();
+      const body = code.getChildren().find((child) => child.id.endsWith("-code")) as TextRenderable;
+      const text = body.chunks.map((chunk) => chunk.text).join("");
+      assert.match(text, /\\u001b\]0;.*hiddenEffect\(\).*\\u0007/);
+      assert.doesNotMatch(text, /\x1b|\x07/);
+      const apply = buttons.getChildren().find((child) => child.id.endsWith("-apply"))!;
+      assert.ok(apply.visible);
+      if (stale) await writeFile(path.join(cwd, "example.js"), "changed externally\n");
+      const barrier = new Promise<void>((resolve) => { release = resolve; });
+      const realApply = chat.apply.bind(chat);
+      let writes = 0;
+      chat.apply = async (paths) => { writes++; await barrier; return realApply(paths); };
+      await setup.mockMouse.click(apply.x + 2, apply.y); await setup.flush();
+      assert.ok(ui.working);
+      await setup.mockMouse.click(apply.x + 2, apply.y); await setup.flush();
+      assert.equal(writes, 1);
+      release!(); await waitUntilIdle(ui); await setup.flush();
+      assert.equal(await readFile(path.join(cwd, "example.js"), "utf8"), stale ? "changed externally\n" : replacement + "\n");
+      assert.equal(chat.pendingCount, 0);
+      assert.equal(row.visible, !stale);
+      assert.equal(row.getChildren().find((child) => child.id.endsWith("-applied"))!.visible, !stale);
+      assert.match(setup.captureCharFrame(), stale ? /changed|Apply failed/i : /Applied updates/);
+    } finally { release?.(); await setup.dispose(); await rm(cwd, { recursive: true, force: true }); }
   });
 }
 

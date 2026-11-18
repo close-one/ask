@@ -57,7 +57,7 @@ Configuration is shared with `ask`: layered JSON in `~/.config/ask/`, an optiona
 {
   "$schema": "https://raw.githubusercontent.com/codehausau/ask/main/packages/ask/schema/tui.schema.json",
   "theme": "dracula", "contextWindow": 32768, "mouse": true,
-  "updateView": "search-replace", // or "diff"
+  "updateView": "diff", // default; or "search-replace"
 }
 ```
 
@@ -81,12 +81,11 @@ you can also type `@"path with spaces.ts"` yourself. When no candidate popup is
 active, **Enter** sends. **Shift+Enter** always adds a newline. PageUp/PageDown
 and the mouse wheel scroll the transcript.
 
-Typed mentions must name an existing file or folder, or a glob such as
+Typed or pasted mentions must name an existing file or folder, or a glob such as
 `@src/*.ts`; a mention that names nothing is refused rather than searched for.
 Use the `@` menu to search. Type `\@` for a literal `@` (for example
-`\@Override`); the model receives a plain `@`. Pasted text is never treated as a
-mention: pasting escapes any `@` that would start one, so decorators, JSDoc tags
-and handles in pasted code stay text.
+`\@Override`); the model receives a plain `@`. Pasting preserves `@` and any
+explicit `\@` escapes, so copied prompts retain their file attachments.
 
 Both `@` and `/attach` hide dotfiles/dotfolders by default. Start a filename
 component with `.` to reveal matching hidden entries, for example `@.` or
@@ -149,7 +148,7 @@ before reading it or consuming context budgets. The parent folder stays attached
 Use the restore entry in `/context`, or explicitly mention the file again, to
 reattach it. Explicitly mentioning a whole folder restores its excluded children.
 Expanded file lists reflect the most recent request or local attachment refresh. Earlier answers may
-still quote removed context; `/new` is the way to clear conversation history too.
+still quote removed context; `/clear` clears conversation history while keeping your current context selection.
 
 ### Copying text
 
@@ -377,11 +376,19 @@ It produces ordinary response text with a defined format, not API tool calls:
 
 Update blocks appear in inset, bordered, theme-aware code panels, with the filename
 above the border. SEARCH content is red and REPLACE content is green. Click the header
-to toggle between SEARCH/REPLACE and a colored snippet diff; the code itself stays
-selectable. Set `"updateView": "diff"` in `tui.json` to start in diff view instead
-of the default `"search-replace"`. Clicking changes only that panel's view.
-Snippet line numbers are relative to the SEARCH/REPLACE text, not the full file.
-Use `/review` for the full-file approval diff before `/apply`.
+to toggle between SEARCH/REPLACE and a colored full-file diff; the code itself stays
+selectable. Blocks start in diff view by default. Set `"updateView": "search-replace"`
+in `tui.json` to start in SEARCH/REPLACE view instead. Clicking changes only that panel's view.
+The diff is identical to the approval diff, including file-relative line numbers,
+context and all proposed edits to that file. Previewing it does not authorize writes.
+Invalid proposals show only their original SEARCH/REPLACE text.
+Each valid block has **Review** and **Reject** buttons below it. Review selects the
+same full-file diff in the block and replaces the buttons with **Apply** and
+**Cancel**, plus a note that applying will modify the file. Cancel returns to
+Review/Reject and requires a fresh review; Reject discards the file's proposals.
+Actions cover **all proposed edits to that file**, with matching blocks sharing
+the same review state. Conflicting or otherwise invalid proposals have no buttons.
+The `/review`, `/apply` and `/reject` commands work alongside these controls.
 
 After the answer, the TUI lists each proposed file with its added/removed line
 counts. Files that can run code or change automation (CI workflows, package
@@ -396,7 +403,8 @@ scripts, build files, git hooks, shell scripts, dotfiles) are marked ⚠.
 /reject [path...]       discard proposals (all when no path is given)
 ```
 
-Only files whose diff you have shown with `/review` can be applied. Each diff has
+Only files whose full diff you have shown with Review or `/review` can be applied.
+The Apply button and `/apply` use the same write checks. Each diff has
 one section per edit, with three lines of context, so unchanged lines between two
 edits are never shown as removed and re-added. Quote paths containing spaces.
 Review and apply are local operations, with no second LLM request. Resolve every
@@ -425,9 +433,12 @@ Safety rules:
 
 This initial TUI supports updates to existing files only. Use `ask /create` for
 new files. It has **in-memory history only** (separate from CLI sessions), no
-compaction, no streaming, no model tools, and no model-driven follow-ups. Use `/new` to clear history, attachments, skills and pending edits, and
-destroy the visible transcript and its native renderables. Theme and sidebar
-width remain selected for the current run. `/context`
+compaction, no streaming, no model tools, and no model-driven follow-ups.
+`/clear` clears history, the visible transcript, pending edits and conversation
+usage counters, while keeping attachments, file exclusions, active skills and
+settings. `/new` also removes attachments, exclusions and skills. Both destroy
+the cleared transcript's native renderables and keep the selected theme and sidebar
+width for the current run. `/context`
 opens the context manager; `/help` lists commands; `/quit` or Ctrl+D exits.
 Ctrl+C exits only when no text is selected; otherwise it copies the selection.
 Each submission resends the conversation history. When it no longer fits (see
@@ -473,7 +484,8 @@ neither makes a model request. `/unskill` and `/context` can also remove skills.
 Resolve pending edits before changing skills. `/new` clears skills as well as
 history, attachments and proposals, including skills selected with `--skill`.
 Removing a skill does not remove earlier answers influenced by it from history;
-use `/new` for a clean conversation. No additional libraries are required.
+use `/clear` for a clean conversation with the remaining skills, or `/new` to reset
+all context too. No additional libraries are required.
 
 Run `pnpm build` followed by `pnpm test:bun` under Bun. This includes the real
 Node launcher's isolation from repository/global Bun preloads. Controller/protocol

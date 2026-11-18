@@ -17,10 +17,10 @@ applies here too. This document covers what the TUI adds.
 | Guarantee | Enforced by |
 | --- | --- |
 | One logical completion per submission | No model-driven execution loop; SDK transport retries resend the same body, at most twice |
-| Nothing is written unless you approve it | `<update>` proposals require a diff review and `/apply` |
+| Nothing is written unless you approve it | `<update>` proposals require a full-file diff review, then Apply or `/apply` |
 | Repository runtime hooks never run | The Node launcher runs Bun by absolute path, never from the working directory or a relative `PATH` entry, with `--no-env-file` and a bundled `--config`, so repository/global `bunfig.toml` preloads are skipped |
-| A question cannot attach an unintended file | Typed mentions must name an existing path or glob (no fuzzy search); pasted text is escaped so it never contains mentions |
-| You see what you approve | Proposals are summarised first; only files shown with `/review` can be applied, file by file; files that run code are flagged |
+| Mentions use explicit paths | Typed and pasted mentions must name an existing path or glob (no fuzzy search); explicit `\@` remains literal text |
+| You see what you approve | Proposals are summarised first; only files shown with Review or `/review` can be applied, file by file; files that run code are flagged |
 
 ## TUI update proposals
 
@@ -47,8 +47,12 @@ Any invalid block or non-`stop` completion disables the whole proposal.
 
 After a reply the TUI lists the proposed files with line counts and flags paths
 that run code or change automation (CI workflows, package scripts, build files,
-git hooks, shell scripts, dotfiles). `/apply` only writes files whose diff was
-shown with `/review`, and can approve or reject file by file. Each diff is built
+git hooks, shell scripts, dotfiles). Apply and `/apply` only write files whose
+full diff was shown with Review or `/review`. Block actions cover every pending
+edit to that file. Cancel revokes its reviewed state without discarding edits;
+Reject discards them. Invalid proposals have no action buttons. The block's diff
+preview uses the same full-file diff as review; toggling to it does not authorize
+a write. Each approval diff is built
 from the exact edit ranges, one section per edit with fixed context, so unchanged
 lines between edits are never shown as changed and a small change cannot be
 buried in a long rewrite. These diffs visibly escape
@@ -108,8 +112,8 @@ are limited to 1 MiB and two seconds, and cancelled on exit. No external clipboa
 utility is spawned. SSH/remote sessions refuse host reads to avoid accessing the
 wrong machine's clipboard; use native terminal paste instead. Native paste is
 routed to the composer exactly once, using OpenTUI's ANSI-stripping paste handler.
-Pasted newlines are data, not submission events. Pasted text also has any `@` that
-would start a mention escaped as `\@`, so pasted code cannot attach files. Clipboard text is not sent to
+Pasted newlines are data, not submission events. Pasted `@` mentions behave like
+typed mentions; explicit `\@` escapes remain literal text. Clipboard text is not sent to
 the model until the user submits the prompt, and a changed draft/cursor/selection
 causes a delayed host read to be discarded rather than overwriting user input.
 

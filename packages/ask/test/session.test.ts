@@ -15,6 +15,7 @@ import {
   backupSession,
   buildCompactionPrompt,
   clearCurrentSession,
+  clearSession,
   DEFAULT_SESSION_NAME,
   isValidSessionName,
   listSessions,
@@ -30,6 +31,7 @@ import {
   sessionMessages,
   sessionPath,
   sessionRefs,
+  sessionSkills,
   sessionTokens,
   sessionUsage,
   stateDir,
@@ -130,6 +132,50 @@ test("reset removes the thread and reports whether there was one", async () => {
   ]), env);
   assert.equal(await resetSession(key), true);
   assert.equal(await loadSession(key), null);
+});
+
+test("clear removes turns and backup while preserving context across saves and later turns", async () => {
+  const { env } = await isolatedState();
+  const key = { scope: "/repo/clear", name: "review", env };
+  assert.equal(await clearSession(key), null);
+  const original = appendTurn(null, {
+    ...key, question: "OLD_QUESTION", answer: "OLD_ANSWER", refs: ["a.ts", "a.ts"], skills: ["review"],
+    usage: { input: 10, output: 5 },
+  });
+  await saveSession(original, env);
+  const backup = await backupSession(original, env);
+  const cleared = await clearSession(key);
+  assert.ok(cleared);
+  assert.deepEqual(cleared.turns, []);
+  assert.deepEqual(sessionRefs(cleared), ["a.ts"]);
+  assert.deepEqual(sessionSkills(cleared), ["review"]);
+  assert.equal(sessionTokens(cleared), 0);
+  assert.deepEqual(sessionUsage(cleared), { input: 0, output: 0, reported: 0, turns: 0 });
+  assert.deepEqual(sessionMessages(cleared), []);
+  await assert.rejects(stat(backup), { code: "ENOENT" });
+  assert.deepEqual(await loadSession(key), cleared);
+  const continued = appendTurn(cleared, { ...key, question: "fresh", answer: "answer", refs: ["b.ts"] });
+  await saveSession(continued, env);
+  const loaded = await loadSession(key);
+  assert.deepEqual(sessionRefs(loaded), ["a.ts", "b.ts"]);
+  assert.deepEqual(sessionSkills(loaded), ["review"]);
+  assert.deepEqual(sessionRefs(pruneSession(continued, 0).session), ["a.ts"]);
+  assert.deepEqual(sessionRefs(applyCompaction(continued, "summary")), ["a.ts", "b.ts"]);
+  const again = await clearSession(key);
+  assert.deepEqual(sessionRefs(again), ["a.ts", "b.ts"]);
+  assert.ok(again);
+  assert.equal(await archiveSession(again, env), null);
+  assert.equal(await loadSession(key), null, "/new removes even a context-only thread");
+});
+
+test("malformed retained session context is ignored", async () => {
+  const { env } = await isolatedState();
+  const key = { scope: "/repo/clear", name: DEFAULT_SESSION_NAME, env };
+  const file = await saveSession(session(key.scope), env);
+  for (const context of [null, [], { refs: "a.ts", skills: [] }, { refs: [], skills: [42] }]) {
+    await writeFile(file, JSON.stringify({ ...session(key.scope), context }));
+    assert.equal(await loadSession(key, 0), null);
+  }
 });
 
 test("refs accumulate across turns, deduplicated, first appearance first", () => {

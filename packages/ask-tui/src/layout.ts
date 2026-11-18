@@ -33,6 +33,7 @@ export function createChatLayout(renderer: CliRenderer, model: string, cwd: stri
   const transcript = new ScrollBoxRenderable(renderer, {
     flexGrow: 1, minHeight: 1, scrollY: true, scrollX: false,
     stickyScroll: true, stickyStart: "bottom", contentOptions: { flexDirection: "column", gap: 1 },
+    verticalScrollbarOptions: { paddingLeft: 2 }, // Reserve the gap only while the scrollbar is visible.
   });
   main.add(transcript);
   const status = new TextRenderable(renderer, { content: "Ready · /help for commands", fg: "#9baac1", height: 1, flexShrink: 0, wrapMode: "none" });
@@ -183,8 +184,8 @@ export function createChatLayout(renderer: CliRenderer, model: string, cwd: stri
       sidebarHeading("Last response (input + output)"), `${number(stats.lastInput)} in / ${number(stats.lastOutput)} out`, "",
       sidebarHeading("Session totals"), `${total(stats.totalInput, stats.inputTurns)} input`, `${total(stats.totalOutput, stats.outputTurns)} output`,
       `Usage reported: ${stats.inputTurns} in / ${stats.outputTurns} out of ${stats.turns} turns`, "",
-      sidebarHeading(`Skills (${skillNames.length})`), ...(skillNames.length ? skillNames.map((name) => `• ${terminalField(name)}`) : ["None"]), "",
-      sidebarHeading(`Files referenced (${stats.files.length})`), ...(stats.files.length ? stats.files.map((file) => `• ${terminalField(file)}`) : ["None"]),
+      sidebarHeading(`Skills (${skillNames.length})`), ...(skillNames.length ? skillNames.map((name) => fg("#82cfff")(`• ${terminalField(name)}`)) : ["None"]), "",
+      sidebarHeading(`Files referenced (${stats.files.length})`), ...(stats.files.length ? stats.files.map((file) => fg("#82cfff")(`• ${terminalField(file)}`)) : ["None"]),
     ];
     summary.content = new StyledText(lines.map((line, index) => {
       const suffix = index < lines.length - 1 ? "\n" : "";

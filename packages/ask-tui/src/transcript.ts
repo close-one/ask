@@ -7,7 +7,7 @@ import { sanitizeForTerminal, terminalField } from "@codehaus-au/ask/internal/te
 import type { UpdateView } from "@codehaus-au/ask/internal/config";
 import type { TuiTheme } from "./theme.ts";
 import { parseUpdateRegions, type UpdateRegion, type UpdateSummary } from "./updates.ts";
-import { createUpdatePanel } from "./update-panel.ts";
+import { createUpdatePanel, type UpdateAction, type UpdateReview } from "./update-panel.ts";
 import { COMPOSER_PADDING } from "./layout.ts";
 
 /** Native inline markup, without a Tree-sitter worker/download. */
@@ -27,10 +27,12 @@ function inlineChunks(tokens: readonly Token[]): TextChunk[] {
   });
 }
 
-export function createTranscript(renderer: CliRenderer, transcript: ScrollBoxRenderable, theme: TuiTheme, updateView: UpdateView = "search-replace") {
+export function createTranscript(renderer: CliRenderer, transcript: ScrollBoxRenderable, theme: TuiTheme, updateView: UpdateView = "diff") {
   let serial = 0;
   const markdownText = new Set<TextRenderable>();
   const caps: { text: TextRenderable; glyph: string }[] = [];
+  const updatePanels = new Map<string, ReturnType<typeof createUpdatePanel>[]>();
+  const reviews = new Map<string, UpdateReview>();
   const style = SyntaxStyle.fromStyles({
     default: { fg: theme.palette.text },
     "markup.heading": { fg: theme.palette.accent, bold: true },
@@ -88,18 +90,24 @@ export function createTranscript(renderer: CliRenderer, transcript: ScrollBoxRen
     }));
   }
 
-  function addAnswer(content: string) {
+  function addAnswer(content: string, previews: readonly UpdateReview[], action: (action: UpdateAction, path: string) => void) {
+    for (const panels of updatePanels.values()) for (const panel of panels) panel.sync(undefined);
+    updatePanels.clear(); reviews.clear();
     let regions: UpdateRegion[];
     try { regions = parseUpdateRegions(content); }
     catch { addMarkdown(content); return; }
     if (!regions.length) { addMarkdown(content); return; }
     const lines = content.replace(/\r\n/g, "\n").split("\n");
+    const byPath = new Map(previews.map((preview) => [preview.path, preview]));
     let start = 0;
     for (const region of regions) {
       const prose = lines.slice(start, region.startLine).join("\n");
       if (prose.trim()) addMarkdown(prose);
       const raw = lines.slice(region.startLine, region.endLine).join("\n");
-      transcript.add(createUpdatePanel(renderer, `update-${serial++}`, region.block, raw, updateView));
+      const panel = createUpdatePanel(renderer, `update-${serial++}`, region.block, raw, updateView, byPath.get(region.block.path), (name) => action(name, region.block.path));
+      const panels = updatePanels.get(region.block.path) ?? [];
+      panels.push(panel); updatePanels.set(region.block.path, panels);
+      transcript.add(panel.node);
       start = region.endLine;
     }
     const prose = lines.slice(start).join("\n");
@@ -118,7 +126,9 @@ export function createTranscript(renderer: CliRenderer, transcript: ScrollBoxRen
     ].join("\n"), sensitive ? "#fda4af" : "#fcd34d");
   }
 
-  function review(diffs: readonly { diff: string; sensitive: string | null }[]) {
+  function review(diffs: readonly UpdateReview[], inline = false) {
+    for (const detail of diffs) reviews.set(detail.path, detail);
+    if (inline) return;
     for (const { diff, sensitive } of diffs) {
       const panel = new BoxRenderable(renderer, { flexDirection: "column", width: "100%", flexShrink: 0 });
       if (sensitive) {
@@ -139,6 +149,7 @@ export function createTranscript(renderer: CliRenderer, transcript: ScrollBoxRen
   }
 
   function clear() {
+    updatePanels.clear(); reviews.clear();
     renderer.clearSelection();
     for (const child of [...transcript.getChildren()]) {
       transcript.remove(child);
@@ -153,6 +164,21 @@ export function createTranscript(renderer: CliRenderer, transcript: ScrollBoxRen
 
   return {
     addText, addUserMessage, addAnswer, proposals, review, clear,
+    rejected(paths: readonly string[]) {
+      for (const path of paths) for (const panel of updatePanels.get(path) ?? []) panel.reject();
+    },
+    applied(paths: readonly string[]) {
+      for (const path of paths) for (const panel of updatePanels.get(path) ?? []) panel.apply();
+    },
+    syncUpdates(pending: readonly { path: string; reviewed: boolean }[], working: boolean) {
+      const byPath = new Map(pending.map((file) => [file.path, file]));
+      for (const [path, panels] of updatePanels) {
+        const file = byPath.get(path);
+        if (!file?.reviewed) reviews.delete(path);
+        const review = reviews.get(path);
+        for (const panel of panels) panel.sync(file ? { working, ...(review ? { review } : {}) } : undefined);
+      }
+    },
     paintTheme() {
       for (const text of markdownText) {
         if (text.isDestroyed) markdownText.delete(text); else theme.paint(text);
@@ -164,6 +190,6 @@ export function createTranscript(renderer: CliRenderer, transcript: ScrollBoxRen
       style.registerStyle("markup.raw", { fg: theme.palette.code });
     },
     resize() { for (const { text, glyph } of caps) text.content = glyph.repeat(renderer.width); },
-    dispose() { markdownText.clear(); caps.length = 0; style.destroy(); },
+    dispose() { markdownText.clear(); caps.length = 0; updatePanels.clear(); reviews.clear(); style.destroy(); },
   };
 }

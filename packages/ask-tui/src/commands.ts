@@ -3,7 +3,7 @@ import type { ManagerMode } from "./completion.ts";
 
 export const TUI_HELP = `Chat: mention @files or @folders anywhere; quote paths with spaces.
 Typed mentions must name an existing path or glob; use the @ menu to search. Type \\@ for a literal @.
-Pasted text is never read as a mention. Each submission makes one logical completion; no model tools.
+Pasted @mentions work like typed mentions. Each submission makes one logical completion; no model tools.
 Transient failures may retry the same request up to twice, without model-driven follow-ups.
 /review [path...]  show pending diffs    /apply [path...]  write reviewed files
 /reject [path...]  discard proposals     (no paths = every pending file)
@@ -13,7 +13,8 @@ Transient failures may retry the same request up to twice, without model-driven 
 /unskill [name]  choose/remove an active skill (instructions only; no scripts)
 /copy  copy the last answer (Markdown) to your terminal clipboard
 /theme [name]  choose a theme; it is saved as your default in tui.json
-/new  clear this in-memory conversation and transcript    /help    /quit
+/clear  clear conversation and pending edits; keep attachments and skills
+/new  clear conversation, attachments and skills    /help    /quit
 Enter selects an open mention, otherwise sends · Shift+Enter inserts a newline
 Type / for searchable commands · /context, /detach and /unskill open management popups
 Ctrl+C copies highlighted text (OSC52); without a selection it exits
@@ -32,9 +33,15 @@ export function commandPaths(text: string): string[] {
 export async function dispatchCommand(text: string, chat: TuiChat, actions: {
   quit(): void; clear(): void; review(paths: readonly string[]): void; copy(text: string | null): void;
   addText(text: string, color?: string): void; openManager(mode: ManagerMode, query?: string): void;
+  rejected(paths: readonly string[]): void;
+  applied(paths: readonly string[]): void;
 }): Promise<"handled" | "return" | "prompt"> {
   if (text === "/quit" || text === "/exit") { actions.quit(); return "return"; }
   if (text === "/help") actions.addText(TUI_HELP);
+  else if (text === "/clear") {
+    chat.clearConversation(); actions.clear();
+    actions.addText("Conversation, transcript and pending edits cleared; attachments and skills kept.");
+  }
   else if (text === "/new") {
     chat.reset(); actions.clear();
     actions.addText("Started a new conversation; history, transcript, attachments, skills and pending edits cleared.");
@@ -53,9 +60,11 @@ export async function dispatchCommand(text: string, chat: TuiChat, actions: {
   } else if (/^\/review(?:\s|$)/.test(text)) actions.review(commandPaths(text.slice(7)));
   else if (/^\/reject(?:\s|$)/.test(text)) {
     const rejected = chat.reject(commandPaths(text.slice(7)));
+    actions.rejected(rejected);
     actions.addText(`Rejected ${JSON.stringify(rejected)}; nothing written.${chat.pendingCount ? ` ${chat.pendingCount} file(s) still pending.` : ""}`);
   } else if (/^\/apply(?:\s|$)/.test(text)) {
     const applied = await chat.apply(commandPaths(text.slice(6)));
+    actions.applied(applied);
     actions.addText(`Applied updates to ${JSON.stringify(applied)}. Review with git diff.${chat.pendingCount ? ` ${chat.pendingCount} file(s) still pending.` : ""}`, "#a7f3d0");
   }
   else if (text.startsWith("/")) throw new Error("Unknown command. Use /help.");

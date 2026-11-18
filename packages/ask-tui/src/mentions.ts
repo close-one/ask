@@ -1,14 +1,7 @@
-/** Shared syntax for typed mentions and picker insertions. No shell evaluation. */
+/** Shared syntax for typed/pasted mentions and picker insertions. No shell evaluation. */
 export function chatRefs(text: string): string[] {
   return [...text.matchAll(/(?:^|[\s(])@(?:"([^"\n]+)"|'([^'\n]+)'|([^\s)]+))/g)]
     .map((match) => match[1] ?? match[2] ?? match[3]!.replace(/[,;:]$/, ""));
-}
-
-/** Pasted code (decorators, JSDoc tags, handles) must never attach files, so
- * escape anything that would read as a mention. The model receives plain @.
- */
-export function escapePastedMentions(text: string): string {
-  return text.replace(/(^|[\s(])@/g, "$1\\@");
 }
 
 /** Return null instead of inserting a reference that could select another file. */

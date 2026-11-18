@@ -105,6 +105,9 @@ export class TuiChat {
 
   get attachmentPaths(): readonly string[] { return this.attachments.map((file) => path.relative(this.options.cwd, file) || "."); }
   get pendingCount(): number { return this.pending.length; }
+  get pendingReviews(): readonly { path: string; reviewed: boolean }[] {
+    return this.pending.map((update) => ({ path: update.path, reviewed: this.reviewed.has(update.path) }));
+  }
   get pendingSummary(): readonly UpdateSummary[] { return this.pending.map(updateSummary); }
   get activeSkillNames(): readonly string[] { return this.skills.map((skill) => skill.name); }
   get excludedFilePaths(): readonly string[] { return [...this.excludedFiles].map((file) => path.relative(this.options.cwd, file)); }
@@ -288,15 +291,26 @@ export class TuiChat {
     } finally { this.busy = false; }
   }
 
+  /** Full-file diffs from the validated snapshots, without authorizing writes. */
+  previewDetails(paths: readonly string[] = []): { path: string; diff: string; sensitive: string | null }[] {
+    return this.selectPending(paths).map((update) => ({ path: update.path, diff: updateDiff(update), sensitive: sensitivePathReason(update.path) }));
+  }
+
   /** Diffs for pending files (all when none are named); only reviewed files can be applied. */
   reviewDetails(paths: readonly string[] = []): { path: string; diff: string; sensitive: string | null }[] {
-    const selected = this.selectPending(paths);
-    for (const update of selected) this.reviewed.add(update.path);
-    return selected.map((update) => ({ path: update.path, diff: updateDiff(update), sensitive: sensitivePathReason(update.path) }));
+    const details = this.previewDetails(paths);
+    for (const detail of details) this.reviewed.add(detail.path);
+    return details;
   }
 
   review(paths: readonly string[] = []): string[] {
     return this.reviewDetails(paths).map((detail) => detail.diff);
+  }
+
+  /** Leave proposals pending, but require a fresh review before writing. */
+  cancelReview(paths: readonly string[]): void {
+    if (this.busy) throw new Error("A request or write is already in progress.");
+    for (const update of this.selectPending(paths)) this.reviewed.delete(update.path);
   }
 
   /** Write reviewed proposals (all when none are named). Others stay pending. */
@@ -370,13 +384,12 @@ export class TuiChat {
     if (!this.attachments.some((ref) => containsPath(ref, absolute))) this.attachments.push(absolute);
   }
 
-  reset(): void {
+  /** Start a fresh conversation with the same selected context and settings. */
+  clearConversation(): void {
     if (this.busy) throw new Error("A request or write is already in progress.");
     this.history.length = 0;
-    this.attachments = [];
     this.pending = [];
     this.reviewed.clear();
-    this.skills = [];
     this.turns = 0;
     this.lastInput = null;
     this.lastOutput = null;
@@ -384,8 +397,14 @@ export class TuiChat {
     this.totalOutput = 0;
     this.inputTurns = 0;
     this.outputTurns = 0;
+    this.unreportedDrops = 0;
+  }
+
+  reset(): void {
+    this.clearConversation();
+    this.attachments = [];
+    this.skills = [];
     this.files = [];
     this.excludedFiles.clear();
-    this.unreportedDrops = 0;
   }
 }

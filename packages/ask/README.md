@@ -342,7 +342,7 @@ $ ask @src/chat.ts review this for me
 | --- | --- |
 | `@<TAB>` | with fzf, the picker — files **and directories**, so you can attach a whole tree; otherwise everything in the current directory, directories gaining a `/` so you can keep descending |
 | `@buried<TAB>` | plain mode: when nothing matches as a prefix, a recursive tree search — the same fallback the CLI performs, git-aware when available |
-| `<TAB>` on an empty first word | the verbs `/new`, `/reset`, `/session` |
+| `<TAB>` on an empty first word | the verbs `/new`, `/clear`, `/reset`, `/session`, and others |
 | `/<TAB>`, `/se<TAB>` | the verbs, filtered |
 | `-<TAB>` / `--max-t<TAB>` | flags |
 | `--token-field <TAB>` | `max_tokens`, `max_completion_tokens` |
@@ -829,6 +829,8 @@ $ ask 'now explain the token field logic'
 ```bash
 ask /new '<prompt>'   # file the thread away, start fresh, then ask
 ask /new              # file the thread away and start fresh
+ask /clear            # clear history, keeping attached references and skills
+ask /clear '<prompt>' # clear history, keep context, then ask
 ask /reset            # throw the current thread away
 ask /session          # show the current thread, no API call
 ask /sessions         # list this repository's threads
@@ -839,6 +841,21 @@ ask /create <path> '<prompt>'   # write a new file
 ask /skills [term]              # list or search skills
 ask /compact          # summarise the thread into notes, files stay attached
 ```
+
+### `/clear` keeps the context
+
+`/clear` removes the current thread's questions, answers and usage totals while
+keeping its attached references and selected skills. It makes no model request
+unless you also supply a prompt. Files and skills are re-read on the next question,
+which starts with no previous conversation. The selected thread and configuration
+stay the same; `--session <name>` targets a specific thread, and `--clear` is the
+flag alias. Standard session rules still apply, including expiry and `--no-session`.
+
+The retained references and skill names are saved separately from turns, so they
+survive between CLI invocations. `/session` lists them even when the thread has
+zero turns. Clearing removes the thread's pre-compaction backup too; existing
+archived threads are unaffected. `/new` or `/reset` also removes retained context
+from the current thread.
 
 ### `/new` keeps the old conversation
 
@@ -929,7 +946,7 @@ from turn 2 onward the running thread total:
 `spent` counts only turns where the endpoint reported usage, and says so
 (`2/3 turns`) when some did not — a partial total is never passed off as complete.
 
-`--new` / `--reset`, `--show-session` and `--no-session` are flag aliases for
+`--new` / `--clear` / `--reset`, `--show-session` and `--no-session` are flag aliases for
 scripting. It is still **one logical completion per invocation** — a session only decides
 what goes into that request. No tools, no loop.
 

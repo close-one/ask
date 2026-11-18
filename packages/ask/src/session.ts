@@ -54,6 +54,8 @@ export interface Session {
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly turns: readonly SessionTurn[];
+  /** Context retained independently of conversation turns by /clear. */
+  readonly context?: { readonly refs: readonly string[]; readonly skills: readonly string[] };
 }
 
 export interface SessionKey {
@@ -106,7 +108,12 @@ function isSession(value: unknown): value is Session {
     typeof candidate.name === "string" &&
     typeof candidate.scope === "string" &&
     typeof candidate.updatedAt === "string" &&
-    Array.isArray(candidate.turns)
+    Array.isArray(candidate.turns) &&
+    (candidate.context === undefined || (
+      candidate.context !== null && typeof candidate.context === "object" &&
+      Array.isArray(candidate.context.refs) && candidate.context.refs.every((ref) => typeof ref === "string") &&
+      Array.isArray(candidate.context.skills) && candidate.context.skills.every((skill) => typeof skill === "string")
+    ))
   );
 }
 
@@ -176,9 +183,23 @@ export async function resetSession(key: SessionKey): Promise<boolean> {
   return existed;
 }
 
+/** Remove conversation history and its backup, keeping user-selected context. */
+export async function clearSession(key: SessionKey, now: Date = new Date()): Promise<Session | null> {
+  const current = await loadSession(key, 0);
+  if (!current) return null;
+  const timestamp = now.toISOString();
+  const cleared: Session = {
+    ...current, createdAt: timestamp, updatedAt: timestamp, turns: [],
+    context: { refs: sessionRefs(current), skills: sessionSkills(current) },
+  };
+  await saveSession(cleared, key.env);
+  await rm(sessionBackupPath(key), { force: true });
+  return cleared;
+}
+
 /** Skill names from every turn, in order of first appearance, deduplicated. */
 export function sessionSkills(session: Session | null): string[] {
-  const seen = new Set<string>();
+  const seen = new Set<string>(session?.context?.skills);
   for (const turn of session?.turns ?? []) {
     for (const name of turn.skills ?? []) seen.add(name);
   }
@@ -187,7 +208,7 @@ export function sessionSkills(session: Session | null): string[] {
 
 /** References from every turn, in order of first appearance, deduplicated. */
 export function sessionRefs(session: Session | null): string[] {
-  const seen = new Set<string>();
+  const seen = new Set<string>(session?.context?.refs);
   for (const turn of session?.turns ?? []) {
     for (const ref of turn.refs) seen.add(ref);
   }
@@ -336,6 +357,7 @@ export function appendTurn(session: Session | null, options: AppendOptions): Ses
     scope: options.scope,
     createdAt: session?.createdAt ?? timestamp,
     updatedAt: timestamp,
+    ...(session?.context ? { context: session.context } : {}),
     turns: [...(session?.turns ?? []), turn],
   };
 }
@@ -503,7 +525,10 @@ export async function archiveSession(
   env: NodeJS.ProcessEnv = process.env,
   now: Date = new Date(),
 ): Promise<string | null> {
-  if (session.turns.length === 0) return null;
+  if (session.turns.length === 0) {
+    await resetSession({ scope: session.scope, name: session.name, env });
+    return null;
+  }
 
   // A second archive in the same minute gets a counter rather than clobbering.
   const base = `${session.name}-${archiveSuffix(now)}`;

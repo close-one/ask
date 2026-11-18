@@ -26,7 +26,7 @@ _ASK_FLAGS="--all-matches --allow-insecure-http --api-key --apply --base-url --c
 --diff --dry-run --file \
 --help --install-completion \
 --include-secrets --json --max-file-bytes --max-files --max-tokens \
---list-sessions --list-skills --max-total-bytes --model --new --no-color \
+--list-sessions --list-skills --max-total-bytes --model --new --clear --no-color \
 --no-instructions --no-next \
 --no-session \
 --quiet --raw --reset \
@@ -37,7 +37,7 @@ _ASK_FLAGS="--all-matches --allow-insecure-http --api-key --apply --base-url --c
 --temperature --timeout --token-field --trust --untrust --version -V -f -h -m -q -s"
 
 # Chat-style verbs, accepted as the first word after `ask`.
-_ASK_VERBS="/compact /config /create /diff /new /reset /session /sessions /skills /switch /trust /untrust /write"
+_ASK_VERBS="/clear /compact /config /create /diff /new /reset /session /sessions /skills /switch /trust /untrust /write"
 
 # Most candidates offered for a recursive search, to keep TAB responsive.
 _ASK_SEARCH_LIMIT=${_ASK_SEARCH_LIMIT:-50}

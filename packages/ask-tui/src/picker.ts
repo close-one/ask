@@ -11,6 +11,7 @@ export const SLASH_COMMANDS = [
   { value: "/reject", description: "Discard pending edits (all, or name files)" },
   { value: "/copy", description: "Copy the last answer to the clipboard as Markdown" },
   { value: "/theme", description: "Choose a color theme (saved as your default)" },
+  { value: "/clear", description: "Clear conversation and pending edits; keep attachments and skills" },
   { value: "/new", description: "Clear conversation, attachments and skills" },
   { value: "/help", description: "Show commands and keyboard shortcuts" },
   { value: "/quit", description: "Exit the TUI" },

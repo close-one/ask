@@ -11,6 +11,9 @@ checks, skills and terminal sanitising by depending on the exact matching
 `@codehaus-au/ask` version; the two packages are always released together with
 the same version number.
 
+See the shared [security policy](https://github.com/codehausau/ask/blob/main/SECURITY.md)
+for both interfaces and vulnerability reporting.
+
 ## Install
 
 Requires Node.js 20+ (for the launcher) and **Bun 1.3.14+** on `PATH`:

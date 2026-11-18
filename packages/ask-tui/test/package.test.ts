@@ -54,7 +54,7 @@ test("the npm tarball pins the matching core version and ships only the runnable
   const listing = await run("tar", ["-tzf", tarball], { env, maxBuffer: 4 * 1024 * 1024 });
   const files = new Set(listing.stdout.trim().split("\n").map((file) => file.replace(/^package\//, "")));
   for (const required of [
-    "package.json", "README.md", "SECURITY.md", "LICENSE", "THIRD_PARTY_NOTICES.md",
+    "package.json", "README.md", "LICENSE", "THIRD_PARTY_NOTICES.md",
     "dist/src/launcher.js", "dist/src/index.js", "dist/src/ui.js", "dist/src/bunfig.toml",
     "dist/src/chat.js", "dist/src/picker.js", "dist/src/updates.js",
     "dist/src/themes.js", "dist/src/theme.js", "dist/src/themes/default.js", "dist/src/themes/dracula.js",
@@ -62,11 +62,12 @@ test("the npm tarball pins the matching core version and ships only the runnable
   ]) assert.ok(files.has(required), `missing packaged file: ${required}`);
   for (const file of files) {
     assert.ok(file.startsWith("dist/src/") || file.startsWith("schema/") ||
-      ["package.json", "README.md", "SECURITY.md", "LICENSE", "THIRD_PARTY_NOTICES.md"].includes(file), `unexpected packaged file: ${file}`);
+      ["package.json", "README.md", "LICENSE", "THIRD_PARTY_NOTICES.md"].includes(file), `unexpected packaged file: ${file}`);
     assert.doesNotMatch(file, /(^|\/)\.env(?:\.|$)|(^|\/)\.npmrc$/);
   }
   assert.equal([...files].filter((file) => file.startsWith("dist/src/themes/") && file.endsWith(".json")).length, 0, "obsolete OpenCode assets must not ship");
   assert.equal([...files].filter((file) => file.startsWith("dist/src/themes/") && file.endsWith(".js") && !file.endsWith("/types.js")).length, 40);
+  assert.match(await readFile(path.join(installed, "README.md"), "utf8"), /https:\/\/github\.com\/codehausau\/ask\/blob\/main\/SECURITY\.md/);
 
   await symlink(path.join(ROOT, "node_modules"), path.join(installed, "node_modules"), "junction");
   await access(path.join(installed, "dist", "src", "launcher.js"), constants.X_OK);

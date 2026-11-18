@@ -35,7 +35,6 @@
     "dist/src",
     "schema",
     "README.md",
-    "SECURITY.md",
     "THIRD_PARTY_NOTICES.md"
   ],
   "scripts": {

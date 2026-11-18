@@ -9,6 +9,9 @@ context, ask a question, get a single answer. **No model tools, no agent loop**
 — one logical completion per invocation. An interactive chat is available separately as
 [`@codehaus-au/ask-tui`](https://github.com/codehausau/ask/tree/main/packages/ask-tui).
 
+See the shared [security policy](https://github.com/codehausau/ask/blob/main/SECURITY.md)
+for both interfaces and vulnerability reporting.
+
 ```console
 $ ask '@src/context.ts - review this file for me'
 ```

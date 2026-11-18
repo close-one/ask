@@ -81,8 +81,7 @@
     "dist/src",
     "schema",
     "completions",
-    "README.md",
-    "SECURITY.md"
+    "README.md"
   ],
   "scripts": {
     "build": "tsc && chmod +x dist/src/cli.js",

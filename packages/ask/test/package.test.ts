@@ -54,7 +54,7 @@ test("the npm tarball contains the runnable CLI and completions, without source/
   assert.equal(archive.version, manifest.version);
   const files = new Set(archive.files.map((file) => file.path));
   for (const required of [
-    "package.json", "README.md", "SECURITY.md", "LICENSE", "completions/ask.bash",
+    "package.json", "README.md", "LICENSE", "completions/ask.bash",
     "dist/src/cli.js", "dist/src/safe-write.js", "dist/src/terminal.js",
     "schema/ask.schema.json", "schema/cli.schema.json", "schema/tui.schema.json",
   ]) assert.ok(files.has(required), `missing packaged file: ${required}`);
@@ -68,7 +68,7 @@ test("the npm tarball contains the runnable CLI and completions, without source/
   }
   for (const file of files) {
     assert.ok(file.startsWith("dist/src/") || file.startsWith("completions/") || file.startsWith("schema/") ||
-      ["package.json", "README.md", "SECURITY.md", "LICENSE"].includes(file), `unexpected packaged file: ${file}`);
+      ["package.json", "README.md", "LICENSE"].includes(file), `unexpected packaged file: ${file}`);
     assert.doesNotMatch(file, /(^|\/)\.env(?:\.|$)|(^|\/)\.npmrc$/);
     assert.doesNotMatch(file, /^dist\/src\/(?:tui(?:[-/.]|$)|themes(?:\/|\.)|updates\.)/, "TUI files ship in @codehaus-au/ask-tui");
   }
@@ -76,6 +76,7 @@ test("the npm tarball contains the runnable CLI and completions, without source/
   const tarball = path.join(packedDir, archive.filename);
   await run("tar", ["-xzf", tarball, "-C", extracted], { env });
   const installed = path.join(extracted, "package");
+  assert.match(await readFile(path.join(installed, "README.md"), "utf8"), /https:\/\/github\.com\/codehausau\/ask\/blob\/main\/SECURITY\.md/);
   await symlink(path.join(ROOT, "node_modules"), path.join(installed, "node_modules"), "junction");
   const cli = path.join(installed, "dist", "src", "cli.js");
   await access(cli, constants.X_OK);

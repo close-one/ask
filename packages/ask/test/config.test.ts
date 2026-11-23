@@ -48,7 +48,7 @@ test("layers apply in order: global, custom, project, .ask, inline, ASK_* variab
   env["ASK_CONFIG_CONTENT"] = '{ "model": "inline", "tui": { "theme": "nord" } }';
   env["ASK_MODEL"] = "variable";
   const loaded = await loadSettings({
-    cwd: project, env, configDir: custom, flags: flagLayer([["--temperature", "0.5", ["temperature"]]]),
+    interface: "all", cwd: project, env, configDir: custom, flags: flagLayer([["--temperature", "0.5", ["temperature"]]]),
   });
   const { settings, sources } = loaded;
   assert.equal(settings.model, "variable");
@@ -67,6 +67,62 @@ test("layers apply in order: global, custom, project, .ask, inline, ASK_* variab
     "environment default", "global ask.json", "global tui.jsonc", "custom ask.json",
     "project ask.json", "project .ask/ask.json", "project .ask/cli.json", "ASK_CONFIG_CONTENT", "env ASK_MODEL", "flags",
   ]);
+});
+
+for (const active of ["cli", "tui"] as const) {
+  const inactive = active === "cli" ? "tui" : "cli";
+  for (const location of ["global", "custom", "project"] as const) {
+    test(`${active} ignores invalid ${inactive} files in ${location}; full checks reject them`, async (t) => {
+      const { global, custom, project, env, write } = await sandbox(t);
+      const dir = { global, custom, project: path.join(project, ".ask") }[location];
+      await write(path.join(global, "ask.json"), { model: "common" });
+      const options = { interface: active, cwd: project, env, configDir: custom };
+      for (const invalid of ["{", active === "cli" ? { contextWindow: -1 } : { sessionMaxTokens: -1 }]) {
+        await write(path.join(dir, `${inactive}.json`), invalid);
+        const loaded = await loadSettings(options);
+        assert.equal(loaded.settings.model, "common");
+        assert.deepEqual(loaded.settings[inactive], {});
+        assert.equal(loaded.layers.some((layer) => layer.files.some((file) => file.endsWith(`${inactive}.json`))), false);
+        assert.deepEqual(loaded.notes, []);
+        await assert.rejects(loadSettings({ ...options, interface: "all" }), ConfigFileError);
+        await assert.rejects(loadSettings({ ...options, interface: inactive }), ConfigFileError);
+      }
+      await write(path.join(dir, `${inactive}.jsonc`), {});
+      await loadSettings(options);
+      await assert.rejects(loadSettings({ ...options, interface: "all" }), /both .* exist/);
+      await write(path.join(global, "ask.json"), { timeout: -1 });
+      await assert.rejects(loadSettings(options), /timeout must be/);
+    });
+  }
+
+  test(`${active} ignores inactive inline, flag and named-variable values`, async (t) => {
+    const { project, env } = await sandbox(t);
+    const scopedEnv = {
+      ...env, ASK_CONFIG_CONTENT: JSON.stringify({ model: "inline", [inactive]: false }),
+      ...(active === "cli" ? { ASK_CONTEXT_WINDOW: "invalid" } : { ASK_SESSION_TTL: "invalid" }),
+    };
+    const options = { interface: active, cwd: project, env: scopedEnv, flags: { [inactive]: false } };
+    const loaded = await loadSettings(options);
+    assert.equal(loaded.settings.model, "inline");
+    assert.deepEqual(loaded.settings[inactive], {});
+    assert.deepEqual(loaded.notes, []);
+    await assert.rejects(loadSettings({ ...options, interface: "all" }), ConfigFileError);
+    await assert.rejects(loadSettings({ ...options, interface: "all", env, flags: options.flags }), ConfigFileError);
+    await assert.rejects(loadSettings({ ...options, interface: "all", env: { ...scopedEnv, ASK_CONFIG_CONTENT: "{}" }, flags: {} }), /Invalid ASK_/);
+    await assert.rejects(loadSettings({ ...options, env: { ...scopedEnv, ASK_CONFIG_CONTENT: "{" } }), /invalid JSON/);
+  });
+}
+
+test("inactive project files still invalidate trust when changed", async (t) => {
+  const { project, env, write } = await sandbox(t);
+  await write(path.join(project, "ask.json"), { endpoint: { apiKey: "trusted-key" } });
+  await write(path.join(project, ".ask", "tui.json"), { theme: "ask" });
+  await trustProject(project, env);
+  assert.equal((await loadSettings({ cwd: project, env })).settings.endpoint.apiKey, "trusted-key");
+  await write(path.join(project, ".ask", "tui.json"), "{");
+  const loaded = await loadSettings({ cwd: project, env });
+  assert.equal(loaded.settings.endpoint.apiKey, undefined);
+  assert.match(loaded.notes.join("\n"), /changed since it was trusted/);
 });
 
 test("null removes a lower layer's value; an empty or unset {env:} value falls through", async (t) => {
@@ -227,27 +283,27 @@ test("resetting the endpoint URL drops foreign credentials, but not credentials 
 
 test("ASK_* variables are typed and validated; flags report their own names", async (t) => {
   const { project, env } = await sandbox(t);
-  const loaded = await loadSettings({ cwd: project, env: { ...env, ASK_TIMEOUT: "1.5", ASK_NEXT: "0", ASK_CONTEXT_WINDOW: "32768" } });
+  const loaded = await loadSettings({ interface: "all", cwd: project, env: { ...env, ASK_TIMEOUT: "1.5", ASK_NEXT: "0", ASK_CONTEXT_WINDOW: "32768" } });
   assert.equal(loaded.settings.timeout, 1.5);
   assert.equal(loaded.settings.cli.next, false);
   assert.equal(loaded.settings.tui.contextWindow, 32768);
-  await assert.rejects(loadSettings({ cwd: project, env: { ...env, ASK_CONTEXT_WINDOW: "1.5" } }), /Invalid ASK_CONTEXT_WINDOW: must be a positive integer/);
+  await assert.rejects(loadSettings({ interface: "tui", cwd: project, env: { ...env, ASK_CONTEXT_WINDOW: "1.5" } }), /Invalid ASK_CONTEXT_WINDOW: must be a positive integer/);
   await assert.rejects(loadSettings({ cwd: project, env: { ...env, ASK_TIMEOUT: "soon" } }), /Invalid ASK_TIMEOUT/);
   assert.throws(() => flagLayer([["--max-tokens", "-1", ["maxTokens"]]]), /Invalid --max-tokens: must be a positive integer/);
 });
 
 test("update block view is a validated, layered TUI preference", async (t) => {
   const { global, project, env, write } = await sandbox(t);
-  assert.equal((await loadSettings({ cwd: project, env })).settings.tui.updateView, undefined);
+  assert.equal((await loadSettings({ interface: "tui", cwd: project, env })).settings.tui.updateView, undefined);
   await write(path.join(global, "tui.json"), { updateView: "diff" });
-  assert.equal((await loadSettings({ cwd: project, env })).settings.tui.updateView, "diff");
+  assert.equal((await loadSettings({ interface: "tui", cwd: project, env })).settings.tui.updateView, "diff");
   await write(path.join(project, ".ask", "tui.json"), { updateView: "search-replace" });
-  assert.equal((await loadSettings({ cwd: project, env })).settings.tui.updateView, "search-replace");
+  assert.equal((await loadSettings({ interface: "tui", cwd: project, env })).settings.tui.updateView, "search-replace");
   await write(path.join(project, ".ask", "tui.json"), { updateView: null });
-  assert.equal((await loadSettings({ cwd: project, env })).settings.tui.updateView, undefined);
+  assert.equal((await loadSettings({ interface: "tui", cwd: project, env })).settings.tui.updateView, undefined);
   for (const updateView of ["patch", true, 1]) {
     await write(path.join(project, ".ask", "tui.json"), { updateView });
-    await assert.rejects(loadSettings({ cwd: project, env }), /updateView must be "search-replace" or "diff"/);
+    await assert.rejects(loadSettings({ interface: "tui", cwd: project, env }), /updateView must be "search-replace" or "diff"/);
   }
 });
 
@@ -336,7 +392,7 @@ test("saveGlobalSetting writes only the user's global file, creating or editing 
   const fresh = parseJsonc(await (await import("node:fs/promises")).readFile(created, "utf8"), created);
   assert.deepEqual(fresh, { $schema: schemaUrl("tui"), theme: "dracula" });
   if (process.platform !== "win32") assert.equal((await (await import("node:fs/promises")).stat(created)).mode & 0o777, 0o600);
-  assert.equal((await loadSettings({ cwd: global, env })).settings.tui.theme, "dracula");
+  assert.equal((await loadSettings({ interface: "tui", cwd: global, env })).settings.tui.theme, "dracula");
 
   await rm(created);
   await write(path.join(global, "tui.jsonc"), '{\n  // mine\n  "mouse": false,\n}\n');

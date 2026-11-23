@@ -26,7 +26,8 @@ $XDG_CONFIG_HOME/ask), --config <dir> or $ASK_CONFIG, the project's ask.json(c),
 its .ask/ directory, $ASK_CONFIG_CONTENT, ASK_* variables, then flags. TUI settings
 go in tui.json(c): theme, contextWindow, mouse. A project cannot choose the
 endpoint or key, or use {env:VAR}, until you run: ask /trust
---show-config prints each setting and where it came from.
+ --show-config prints each setting and where it came from.
+ --check-config validates common, CLI and TUI settings, then exits.
 AGENTS.md from each config directory and the project root, plus configured
 instructions files, are added to the system prompt; --no-instructions skips them.
 One logical completion per submission; no model tools or agent loop.
@@ -58,6 +59,7 @@ async function main() {
     "context-window": { type: "string" }, "no-mouse": { type: "boolean" },
     timeout: { type: "string" }, theme: { type: "string" },
     config: { type: "string" }, "show-config": { type: "boolean" }, "no-instructions": { type: "boolean" },
+    "check-config": { type: "boolean" },
   } });
   if (values.help) { process.stdout.write(HELP); return; }
   if (!("Bun" in globalThis)) throw new Error("ask-tui requires Bun 1.3.14+; the existing ask CLI still runs on Node.");
@@ -80,6 +82,7 @@ async function main() {
     return;
   }
   const loaded = await loadSettings({
+    interface: values["check-config"] ? "all" : "tui",
     cwd, configDir: values.config,
     flags: flagLayer([
       ["--model", values.model, ["model"]],
@@ -94,7 +97,7 @@ async function main() {
       ["--no-mouse", values["no-mouse"] ? "false" : undefined, ["tui", "mouse"]],
     ]),
   });
-  if (values["show-config"]) { process.stdout.write(`${describeSettings(loaded)}\n`); return; }
+  if (values["show-config"] || values["check-config"]) { process.stdout.write(`${describeSettings(loaded)}\n`); return; }
   if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error("ask-tui requires an interactive terminal. Use ask for pipes and scripts.");
   const { settings } = loaded;
   const baseURL = settings.endpoint.url;

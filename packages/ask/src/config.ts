@@ -336,11 +336,20 @@ export async function projectRoot(cwd: string): Promise<string> {
 }
 
 /** Project config files in a stable order: ./ask.json(c), then .ask/{ask,cli,tui}.json(c). */
-async function projectFiles(root: string): Promise<string[]> {
+async function projectFiles(root: string, names: readonly string[] = ["ask", "cli", "tui"]): Promise<string[]> {
   const files: string[] = [];
   const top = await findFile(root, "ask");
   if (top) files.push(top);
   for (const name of ["ask", "cli", "tui"]) {
+    // Inactive files still participate in trust, but ambiguity is only an error
+    // when that interface is loaded (or during an explicit full check).
+    if (!names.includes(name)) {
+      for (const extension of ["json", "jsonc"]) {
+        const file = path.join(root, ".ask", `${name}.${extension}`);
+        if (await exists(file)) files.push(file);
+      }
+      continue;
+    }
     const file = await findFile(path.join(root, ".ask"), name);
     if (file) files.push(file);
   }
@@ -578,6 +587,8 @@ export interface LoadedSettings {
 }
 
 export interface LoadOptions {
+  /** Common settings plus this interface; "all" is for explicit config checks. Defaults to CLI. */
+  readonly interface?: "cli" | "tui" | "all";
   readonly cwd?: string;
   readonly env?: NodeJS.ProcessEnv;
   /** --config <dir>; overrides $ASK_CONFIG. */
@@ -686,8 +697,14 @@ function pairEndpoint(target: Plain, layer: Plain, label: string, sources: Map<s
   }
 }
 
-/** Load and merge every layer. Throws ConfigFileError for invalid files or values. */
+/** Load common and active-interface layers. Throws ConfigFileError for invalid active files or values. */
 export async function loadSettings(options: LoadOptions = {}): Promise<LoadedSettings> {
+  const active = options.interface ?? "cli";
+  const names: readonly ("ask" | "cli" | "tui")[] = active === "all" ? ["ask", "cli", "tui"] : ["ask", active];
+  // Drop inactive sections before validation, including incorrectly typed ones.
+  const scoped = (value: unknown): unknown => isPlain(value) && active !== "all"
+    ? Object.fromEntries(Object.entries(value).filter(([key]) => key !== (active === "cli" ? "tui" : "cli")))
+    : value;
   const env = options.env ?? process.env;
   const cwd = options.cwd ?? process.cwd();
   const custom = customConfigDir(cwd, env, options.configDir);
@@ -747,7 +764,7 @@ export async function loadSettings(options: LoadOptions = {}): Promise<LoadedSet
 
   const global = globalConfigDir(env);
   await agents(global, "global AGENTS.md", null);
-  for (const layer of await readDirectory(global, ["ask", "cli", "tui"], notes)) {
+  for (const layer of await readDirectory(global, names, notes)) {
     const label = `global ${path.basename(layer.file)}`;
     apply(label, listInstructions(substitute(layer.data, env) as Plain, global, label, null), [layer.file]);
   }
@@ -760,14 +777,14 @@ export async function loadSettings(options: LoadOptions = {}): Promise<LoadedSet
       throw new ConfigFileError(`${options.configDir ? "--config" : "ASK_CONFIG"} ${terminalField(dir)} is not a directory`);
     }
     await agents(dir, "custom AGENTS.md", null);
-    for (const layer of await readDirectory(dir, ["ask", "cli", "tui"], notes)) {
+    for (const layer of await readDirectory(dir, names, notes)) {
       const label = `custom ${path.basename(layer.file)}`;
       apply(label, listInstructions(substitute(layer.data, env) as Plain, dir, label, null), [layer.file]);
     }
   }
 
   const root = await realpath(await projectRoot(cwd)).catch(() => path.resolve(cwd));
-  const files = await projectFiles(root);
+  const files = await projectFiles(root, names);
   let trusted = false;
   if (files.length) {
     const recorded = (await readTrust(env)).projects[root];
@@ -782,6 +799,7 @@ export async function loadSettings(options: LoadOptions = {}): Promise<LoadedSet
   let dotAskAgents = false;
   for (const file of files) {
     const name = path.basename(file).replace(/\.jsonc?$/, "") as "ask" | "cli" | "tui";
+    if (!names.includes(name)) continue;
     const inDotAsk = path.dirname(file) !== root;
     if (inDotAsk && !dotAskAgents) { dotAskAgents = true; await agents(path.dirname(file), "project .ask/AGENTS.md", within); }
     const [layer] = await readDirectory(path.dirname(file), [name], notes);
@@ -794,12 +812,13 @@ export async function loadSettings(options: LoadOptions = {}): Promise<LoadedSet
 
   const inline = env["ASK_CONFIG_CONTENT"];
   if (inline?.trim()) {
-    const data = substitute(validate(parseJsonc(inline, "ASK_CONFIG_CONTENT"), ALL, "ASK_CONFIG_CONTENT", notes), env) as Plain;
+    const data = substitute(validate(scoped(parseJsonc(inline, "ASK_CONFIG_CONTENT")), ALL, "ASK_CONFIG_CONTENT", notes), env) as Plain;
     apply("ASK_CONFIG_CONTENT", listInstructions(data, cwd, "ASK_CONFIG_CONTENT", null), []);
   }
 
   // One layer per named variable, so --show-config can name each one.
   for (const { name, path: segments } of NAMED_VARIABLES) {
+    if ((segments[0] === "cli" || segments[0] === "tui") && !names.includes(segments[0])) continue;
     const raw = env[name];
     if (raw === undefined) continue;
     const single: Plain = {};
@@ -808,7 +827,7 @@ export async function loadSettings(options: LoadOptions = {}): Promise<LoadedSet
   }
 
   if (options.flags) {
-    const flags = dropEmpty(validate(options.flags, ALL, "flags", notes));
+    const flags = dropEmpty(validate(scoped(options.flags), ALL, "flags", notes));
     // Explicit on the command line: a flag URL keeps the effective key.
     merge(merged, flags, "flag", sources);
     layers.push({ label: "flags", files: [] });

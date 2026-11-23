@@ -70,7 +70,9 @@ the system prompt as for `ask`; the TUI lists them in the transcript at startup
 and re-reads them for every message, so edits apply without restarting
 (`--no-instructions` skips them). See the `ask`
 [configuration notes](https://github.com/codehausau/ask/tree/main/packages/ask#configuration);
-`ask-tui --show-config` shows every setting and where it came from.
+`ask-tui --show-config` shows common and TUI settings and where they came from;
+CLI preferences are not loaded. `ask-tui --check-config` explicitly validates
+both interfaces without starting an interactive session or making a request.
 Run `ask-tui --help` for supported flags.
 
 ### Chat, attachments and suggested edits

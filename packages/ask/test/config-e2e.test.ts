@@ -98,6 +98,20 @@ for (const layout of ["src", "dist/src"]) {
     assert.doesNotMatch(afterTrust, /private-project-key/);
     assert.match((await runCli(entry, ["/untrust"], cwd, env)).stdout, /No longer trusting/);
 
+    // A broken TUI preference must not block standalone CLI requests or inspection.
+    const tui = path.join(xdg, "ask", "tui.jsonc");
+    for (const invalid of ["{", '{ "contextWindow": -1 }']) {
+      await writeFile(tui, invalid, { mode: 0o600 });
+      assert.equal(JSON.parse((await runCli(entry, ["--dry-run", "hello"], cwd, env)).stdout).model, "config-model");
+      assert.doesNotMatch((await runCli(entry, ["--show-config"], cwd, env)).stdout, /tui\.jsonc/);
+      await assert.rejects(runCli(entry, ["--check-config"], cwd, env), (error: unknown) => {
+        assert.match((error as { stderr: string }).stderr, /tui\.jsonc/);
+        return true;
+      });
+    }
+    await writeFile(tui, '{}');
+    assert.match((await runCli(entry, ["--check-config"], cwd, env)).stdout, /global tui\.jsonc/);
+
     // A config file any user can write is refused, and that is never silenced.
     if (process.platform !== "win32") {
       await chmod(global, 0o666);

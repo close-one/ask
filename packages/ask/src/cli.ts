@@ -175,6 +175,7 @@ Options
       --api-key <key>       API key (env OPENAI_API_KEY)
       --config <dir>        add a config directory (env ASK_CONFIG); see Configuration
       --show-config         print each setting and where it came from, then exit
+      --check-config        validate common, CLI and TUI settings, then exit
       --no-instructions     skip AGENTS.md and configured instruction files
   -f, --file <path>         attach a path explicitly; repeatable
       --max-tokens <n>      cap the answer length
@@ -682,6 +683,7 @@ async function main(argv: string[]): Promise<number> {
   let loaded: LoadedSettings;
   try {
     loaded = await loadSettings({
+      interface: bool("check-config") ? "all" : "cli",
       configDir: flag("config"),
       flags: flagLayer([
         ["--model", flag("model"), ["model"]],
@@ -699,7 +701,7 @@ async function main(argv: string[]): Promise<number> {
     if (error instanceof ConfigFileError) throw new ConfigError(error.message);
     throw error;
   }
-  if (bool("show-config")) {
+  if (bool("show-config") || bool("check-config")) {
     process.stdout.write(`${describeSettings(loaded)}\n`);
     return 0;
   }

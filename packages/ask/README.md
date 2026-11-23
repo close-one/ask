@@ -150,8 +150,12 @@ schemas describe the same rules the loader enforces; a test keeps them in step.
 comments and other settings.
 
 **See the result** with `ask --show-config` (or `ask /config`). It lists every
-layer, every setting and where it came from, and anything ignored; API keys are
-never printed.
+active layer, every setting and where it came from, and anything ignored; API
+keys are never printed. Normal loading reads common settings plus only the
+active interface's settings: `ask` ignores TUI preferences, and `ask-tui` ignores
+CLI preferences, including inactive inline sections and named variables.
+Use `ask --check-config` (or `ask-tui --check-config`) to validate both interfaces
+explicitly and print their settings without making a request.
 
 **Projects need trust to choose the endpoint.** A cloned repository's
 `ask.json` could otherwise send your files and key to its own server, or use
@@ -498,6 +502,7 @@ when Git cannot verify the undo copy.
 | `--api-key <key>` | API key (env `OPENAI_API_KEY`) |
 | `--config <dir>` | add a config directory (also `ASK_CONFIG`); see [Configuration](#configuration) |
 | `--show-config` / `/config` | print every setting and where it came from |
+| `--check-config` | validate common, CLI and TUI settings, then exit |
 | `--no-instructions` | skip `AGENTS.md` and `instructions` files for this run |
 | `/trust` / `/untrust` | allow or withdraw this project's endpoint and `{env:}` settings |
 | `-f, --file <path>` | attach a path explicitly; repeatable |

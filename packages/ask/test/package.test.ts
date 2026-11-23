@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { constants } from "node:fs";
-import { access, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -13,6 +13,23 @@ import { promisify } from "node:util";
 const run = promisify(execFile);
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
+// Resolve before replacing HOME: asdf and other version-manager shims may need
+// the real home just to locate npm. Run the CLI with this Node, not that shim.
+async function npmCli(): Promise<string> {
+  const candidates = [path.resolve(path.dirname(process.execPath), "../lib/node_modules/npm/bin/npm-cli.js")];
+  for (const dir of (process.env["PATH"] ?? "").split(path.delimiter)) {
+    const resolved = await realpath(path.join(dir, "npm")).catch(() => null);
+    if (resolved && path.basename(resolved) === "npm-cli.js") candidates.push(resolved);
+  }
+  for (const file of candidates) {
+    if (await access(file).then(() => true, () => false)) return file;
+  }
+  const { stdout } = await run("npm", ["root", "--global"], { timeout: 30_000 });
+  const file = path.join(stdout.trim(), "npm", "bin", "npm-cli.js");
+  await access(file);
+  return file;
+}
+
 interface Packed {
   name: string;
   version: string;
@@ -20,7 +37,34 @@ interface Packed {
   files: { path: string }[];
 }
 
+/** npm versions emit either an array, a single report, or package-keyed reports. */
+function packReports(stdout: string): Packed[] {
+  const parsed: unknown = JSON.parse(stdout);
+  const reports: unknown[] = Array.isArray(parsed) ? parsed
+    : parsed && typeof parsed === "object" ? ("name" in parsed ? [parsed] : Object.values(parsed)) : [];
+  assert.ok(reports.length > 0, `empty npm pack report: ${stdout}`);
+  for (const report of reports) {
+    assert.ok(report && typeof report === "object" &&
+      "name" in report && typeof report.name === "string" &&
+      "version" in report && typeof report.version === "string" &&
+      "filename" in report && typeof report.filename === "string" &&
+      "files" in report && Array.isArray(report.files), `unexpected npm pack report: ${stdout}`);
+  }
+  return reports as Packed[];
+}
+
+test("npm pack metadata accepts array, single and package-keyed reports", () => {
+  const report: Packed = { name: "@codehaus-au/ask", version: "0.2.0", filename: "ask.tgz", files: [{ path: "package.json" }] };
+  for (const value of [[report], report, { [report.name]: report }]) {
+    assert.deepEqual(packReports(JSON.stringify(value)), [report]);
+  }
+  for (const value of [null, {}, [], { error: "failed" }]) {
+    assert.throws(() => packReports(JSON.stringify(value)), /npm pack report/);
+  }
+});
+
 test("the npm tarball contains the runnable CLI and completions, without source/test/config leakage", async (t) => {
+  const npm = await npmCli();
   const base = await mkdtemp(path.join(tmpdir(), "ask-package-"));
   t.after(() => rm(base, { recursive: true, force: true }));
   const home = path.join(base, "home");
@@ -43,10 +87,10 @@ test("the npm tarball contains the runnable CLI and completions, without source/
   });
   // pnpm test has already built dist. Avoid rebuilding it concurrently with
   // other suites that execute/copy the compiled CLI.
-  const packed = await run("npm", ["pack", "--ignore-scripts", "--json", "--pack-destination", packedDir], {
+  const packed = await run(process.execPath, [npm, "pack", "--ignore-scripts", "--json", "--pack-destination", packedDir], {
     cwd: ROOT, env, timeout: 30_000, maxBuffer: 4 * 1024 * 1024,
   });
-  const metadata = JSON.parse(packed.stdout) as Packed[];
+  const metadata = packReports(packed.stdout);
   assert.equal(metadata.length, 1);
   const archive = metadata[0]!;
   const manifest = JSON.parse(await readFile(path.join(ROOT, "package.json"), "utf8"));
@@ -100,7 +144,7 @@ test("the npm tarball contains the runnable CLI and completions, without source/
   contextRun.child.stdin?.end();
   assert.match((await contextRun).stdout, /attach\s+sample\.ts/);
 
-  const dryRun = await run("npm", [
+  const dryRun = await run(process.execPath, [npm,
     "publish", tarball, "--dry-run", "--ignore-scripts", "--provenance=false", "--access", "public", "--json",
   ], { cwd: base, env, timeout: 30_000, maxBuffer: 4 * 1024 * 1024 });
   // npm 10 emits metadata directly; newer npm emits a package-name-keyed report.

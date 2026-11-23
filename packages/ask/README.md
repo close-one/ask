@@ -201,6 +201,8 @@ npm install --global \
 
 ### Make a source checkout available as `ask`
 
+The following linking workflow uses the workspace's pinned pnpm 10.
+Newer pnpm releases that remove `link --global` require `pnpm add -g .` instead.
 A fresh pnpm installation may have no global binary directory configured.
 Run this once:
 

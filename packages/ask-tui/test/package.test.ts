@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { constants } from "node:fs";
-import { access, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -14,7 +14,25 @@ const run = promisify(execFile);
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CORE = path.resolve(ROOT, "..", "ask");
 
+// Resolve before replacing HOME: version-manager shims may need the real home
+// just to locate npm. Run the CLI with this Node instead of invoking that shim.
+async function npmCli(): Promise<string> {
+  const candidates = [path.resolve(path.dirname(process.execPath), "../lib/node_modules/npm/bin/npm-cli.js")];
+  for (const dir of (process.env["PATH"] ?? "").split(path.delimiter)) {
+    const resolved = await realpath(path.join(dir, "npm")).catch(() => null);
+    if (resolved && path.basename(resolved) === "npm-cli.js") candidates.push(resolved);
+  }
+  for (const file of candidates) {
+    if (await access(file).then(() => true, () => false)) return file;
+  }
+  const { stdout } = await run("npm", ["root", "--global"], { timeout: 30_000 });
+  const file = path.join(stdout.trim(), "npm", "bin", "npm-cli.js");
+  await access(file);
+  return file;
+}
+
 test("the npm tarball pins the matching core version and ships only the runnable TUI", async (t) => {
+  const npm = await npmCli();
   const base = await mkdtemp(path.join(tmpdir(), "ask-tui-package-"));
   t.after(() => rm(base, { recursive: true, force: true }));
   const home = path.join(base, "home");
@@ -78,7 +96,7 @@ test("the npm tarball pins the matching core version and ships only the runnable
   `], { cwd: base, env });
   assert.equal(themes.stdout.trim(), "41");
 
-  const dryRun = await run("npm", [
+  const dryRun = await run(process.execPath, [npm,
     "publish", tarball, "--dry-run", "--ignore-scripts", "--provenance=false", "--access", "public", "--json",
   ], { cwd: base, env, timeout: 30_000, maxBuffer: 4 * 1024 * 1024 });
   // npm 10 emits metadata directly; newer npm emits a package-name-keyed report.

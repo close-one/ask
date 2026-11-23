@@ -339,6 +339,24 @@ test("AGENTS.md comes from each config directory and the project root, never a p
   assert.match(describeSettings(loaded), /Instruction files \(in order\):[\s\S]*project AGENTS\.md, kept inside the project/);
 });
 
+test("project instruction selection is independent of trust and cannot clear personal instructions when disabled", async (t) => {
+  const { global, project, env, write } = await sandbox(t);
+  await write(path.join(global, "ask.json"), { instructions: ["personal.md"] });
+  await write(path.join(project, "ask.json"), { instructions: null });
+  await write(path.join(project, "AGENTS.md"), "repository");
+  await write(path.join(project, ".ask", "AGENTS.md"), "dot-ask repository");
+  for (const trusted of [false, true]) {
+    if (trusted) await trustProject(project, env);
+    const options = { cwd: project, env };
+    const disabled = await loadSettings({ ...options, projectInstructions: false });
+    assert.deepEqual(disabled.instructions.map((entry) => entry.pattern), [path.join(global, "personal.md")]);
+    assert.deepEqual(disabled.settings.instructions, [path.join(global, "personal.md")]);
+    const enabled = await loadSettings({ ...options, projectInstructions: true });
+    assert.deepEqual(enabled.instructions.map((entry) => entry.source), ["project AGENTS.md", "project .ask/AGENTS.md"]);
+    assert.ok(enabled.instructions.every((entry) => entry.project));
+  }
+});
+
 test("instructions resolve against their own file's directory, join across layers, and null clears them", async (t) => {
   const { global, custom, project, env, write } = await sandbox(t);
   await write(path.join(global, "ask.json"), { instructions: ["rules/*.md", "~/notes/style.md"] });

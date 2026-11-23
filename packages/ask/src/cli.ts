@@ -48,7 +48,7 @@ import {
   type LoadedSettings,
 } from "./config.ts";
 import { legacyEnvNotice } from "./env.ts";
-import { loadInstructions, renderInstructions } from "./instructions.ts";
+import { loadInstructions, renderInstructions, type InstructionFile } from "./instructions.ts";
 import { applyToRc, findExecutable, installInstructions, pickerStatus } from "./install.ts";
 import {
   discoverSkills,
@@ -177,6 +177,8 @@ Options
       --show-config         print each setting and where it came from, then exit
       --check-config        validate common, CLI and TUI settings, then exit
       --no-instructions     skip AGENTS.md and configured instruction files
+      --project-instructions
+                            opt in to project AGENTS.md and configured instructions
   -f, --file <path>         attach a path explicitly; repeatable
       --max-tokens <n>      cap the answer length
       --temperature <n>     sampling temperature (omitted unless set)
@@ -337,11 +339,15 @@ function printContext(
     stdinText: string;
     system: string;
     skills: readonly LoadedSkill[];
+    instructions: readonly InstructionFile[];
     session: Session | null;
     palette: Palette;
   },
 ): void {
   const paint = extras.palette;
+  for (const file of extras.instructions) {
+    process.stdout.write(`${paint.bold("instruction")}  ${terminalField(file.display)}  (${terminalField(file.source)})${file.truncated ? "  (truncated)" : ""}\n`);
+  }
   for (const note of resolutionNotes(context, process.cwd())) {
     process.stdout.write(`${paint.cyan("match")}   ${note}\n`);
   }
@@ -684,6 +690,7 @@ async function main(argv: string[]): Promise<number> {
   try {
     loaded = await loadSettings({
       interface: bool("check-config") ? "all" : "cli",
+      projectInstructions: bool("project-instructions") || bool("show-config") || bool("check-config"),
       configDir: flag("config"),
       flags: flagLayer([
         ["--model", flag("model"), ["model"]],
@@ -710,16 +717,18 @@ async function main(argv: string[]): Promise<number> {
     if (!bool("quiet") || note.startsWith("not reading")) status.note(`-- ${note}`);
   }
   const settings = loaded.settings;
-  // AGENTS.md and `instructions` files, read once and announced: a project's
-  // files are prompt content the repository chose.
+  // Personal instructions are defaults; repository-selected prompt content
+  // requires a per-invocation opt-in, regardless of endpoint trust or sessions.
   const instructions = bool("no-instructions")
     ? { files: [], notes: [] }
     : await loadInstructions(loaded.instructions, loaded.projectRoot);
   if (!bool("quiet")) {
     for (const note of instructions.notes) status.note(`-- ${note}`);
-    if (instructions.files.length) {
-      status.note(`-- instructions: ${instructions.files.map((file) => terminalField(file.display)).join(", ")}`);
-    }
+  }
+  // Explicitly selected project instructions must remain visible even with
+  // --quiet/--json; stdout stays reserved for the answer or machine output.
+  if (instructions.files.length && (!bool("quiet") || bool("project-instructions"))) {
+    status.note(`-- instructions: ${instructions.files.map((file) => terminalField(file.display)).join(", ")}`);
   }
   const timeoutMs = settings.timeout === undefined ? DEFAULT_RESPONSE_TIMEOUT_MS : timeoutSecondsToMs(settings.timeout);
   // Idle timeout for implicit sessions, in minutes; 0 never expires.
@@ -1025,6 +1034,7 @@ async function main(argv: string[]): Promise<number> {
       stdinText,
       system: systemWithSkills,
       skills,
+      instructions: instructions.files,
       session,
       palette: bool("no-color") ? NO_COLOUR : createPalette(supportsColour(process.stdout)),
     });
@@ -1033,6 +1043,7 @@ async function main(argv: string[]): Promise<number> {
 
   // Say which file a search or glob picked before spending tokens on it.
   if (!bool("quiet") && !bool("json")) {
+    if (context.blocks.length) status.note(`-- context: ${context.blocks.map((block) => terminalField(block.path)).join(", ")}`);
     for (const note of resolutionNotes(context, process.cwd())) {
       status.note(`-- ${note}`);
     }

@@ -93,7 +93,7 @@ chmod 600 ~/.config/ask/ask.jsonc
 | `ask.json` or `ask.jsonc` | common settings: `endpoint` (`url`, `apiKey`, `organization`, `project`), `model`, `system`, `temperature`, `maxTokens`, `timeout` (seconds), `instructions` |
 | `cli.json` or `cli.jsonc` | CLI settings: `sessionMaxTokens`, `sessionTtlMinutes` (0 never expires), `next`, `spinner` (`"auto"`, `"off"` or `"ascii"`) |
 | `tui.json` or `tui.jsonc` | TUI settings: `theme`, `contextWindow`, `mouse` |
-| `AGENTS.md` | personal or project instructions added to every request (see below) |
+| `AGENTS.md` | personal instructions by default; project instructions require `--project-instructions` in the CLI |
 | `themes/<name>.json(c)` | custom `ask-tui` themes (see the TUI README) |
 | `skills/<name>/` | skills (see [Skills](#skills)) |
 
@@ -112,18 +112,28 @@ layer's value (for example `"system": null`). An empty string means "not set".
 `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_ORG_ID` and `OPENAI_PROJECT_ID` are
 used only when no layer sets the endpoint: other tools use those names too.
 
-**Instructions.** `AGENTS.md` in each config directory (global, `--config`, the
-project's `.ask/`) and in the project root is added to the system prompt, after
-`system` and before any skills. Parent directories of the project root are never
-searched. `instructions` lists more files or globs, relative to the file that
-lists them; lists from different layers are joined, and `null` clears earlier
-ones (`AGENTS.md` files stay; use `--no-instructions` to skip everything):
+**Instructions.** The one-shot CLI loads user-selected global and `--config`
+instruction files by default. Repository-selected instructions—the project
+root's and `.ask/`'s `AGENTS.md`, plus `instructions` in project config—require
+`--project-instructions` on each invocation. Naming an `@file`, using a session,
+or running `ask /trust` does not opt in. `--no-session` also leaves project
+instructions disabled by default. To select a specific instruction file instead,
+use `--system-file <path>` or attach it explicitly with `@path`.
+
+Selected instructions are added after `system` and before skills. Parent
+directories of the project root are never searched. `instructions` lists files
+or globs relative to the config file that lists them; selected lists are joined,
+and `null` clears earlier selected lists (`AGENTS.md` files stay). Use
+`--no-instructions` to skip all instruction files, even with `--project-instructions`:
 
 ```json
 { "instructions": ["~/notes/style.md", "rules/*.md"] }
 ```
 
-Each run names the instruction files it used on stderr. Files are capped at
+`--show-context` lists selected instruction paths and their sources without
+sending a request. Normal runs name instruction files on stderr before sending;
+project opt-in keeps this notice visible even with `--quiet` or `--json`.
+The TUI retains automatic project instruction loading. Files are capped at
 64 KB each and 256 KB in total; missing, binary or credential-like files are
 skipped with a note, and nothing is guessed from a similar name. A project's
 `AGENTS.md` and instructions are the repository's text: until `ask /trust`, a
@@ -504,6 +514,7 @@ when Git cannot verify the undo copy.
 | `--show-config` / `/config` | print every setting and where it came from |
 | `--check-config` | validate common, CLI and TUI settings, then exit |
 | `--no-instructions` | skip `AGENTS.md` and `instructions` files for this run |
+| `--project-instructions` | opt in to project `AGENTS.md` and configured instruction files for this invocation |
 | `/trust` / `/untrust` | allow or withdraw this project's endpoint and `{env:}` settings |
 | `-f, --file <path>` | attach a path explicitly; repeatable |
 | `--max-tokens <n>` / `--temperature <n>` | only sent when set |

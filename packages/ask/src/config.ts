@@ -569,6 +569,8 @@ export interface InstructionEntry {
   readonly within: string | null;
   /** An AGENTS.md found by convention, rather than listed in `instructions`. */
   readonly implicit: boolean;
+  /** Selected by project configuration, independent of endpoint trust. */
+  readonly project?: boolean;
 }
 
 export interface LoadedSettings {
@@ -587,6 +589,8 @@ export interface LoadedSettings {
 }
 
 export interface LoadOptions {
+  /** Discover project instructions (default true); the one-shot CLI opts in explicitly. */
+  readonly projectInstructions?: boolean;
   /** Common settings plus this interface; "all" is for explicit config checks. Defaults to CLI. */
   readonly interface?: "cli" | "tui" | "all";
   readonly cwd?: string;
@@ -711,16 +715,22 @@ export async function loadSettings(options: LoadOptions = {}): Promise<LoadedSet
   const notes: string[] = [];
   const instructions: InstructionEntry[] = [];
   /** A directory's AGENTS.md, by convention. Missing is fine. */
-  const agents = async (dir: string, source: string, within: string | null) => {
+  const agents = async (dir: string, source: string, within: string | null, project = false) => {
+    if (project && options.projectInstructions === false) return;
     const file = path.join(dir, "AGENTS.md");
-    if (await exists(file)) instructions.push({ pattern: file, source, within, implicit: true });
+    if (await exists(file)) instructions.push({ pattern: file, source, within, implicit: true, project });
   };
   /**
    * Resolve a layer's `instructions` against its own directory, record them, and
    * rewrite them as absolute paths so --show-config shows what will be read.
    * An untrusted project may only name relative paths inside the project.
    */
-  const listInstructions = (data: Plain, base: string, source: string, within: string | null): Plain => {
+  const listInstructions = (data: Plain, base: string, source: string, within: string | null, project = false): Plain => {
+    if (project && options.projectInstructions === false) {
+      const selected = { ...data };
+      delete selected["instructions"];
+      return selected;
+    }
     const listed = data["instructions"];
     if (listed === null) {
       // null clears earlier `instructions`; conventional AGENTS.md files stay.
@@ -742,7 +752,7 @@ export async function loadSettings(options: LoadOptions = {}): Promise<LoadedSet
         notes.push(`${source}: ignored instruction ${terminalField(entry)} (outside the project)`);
         continue;
       }
-      if (!instructions.some((item) => item.pattern === absolute)) instructions.push({ pattern: absolute, source, within, implicit: false });
+      if (!instructions.some((item) => item.pattern === absolute)) instructions.push({ pattern: absolute, source, within, implicit: false, project });
       resolved.push(absolute);
     }
     return { ...data, instructions: resolved };
@@ -795,20 +805,20 @@ export async function loadSettings(options: LoadOptions = {}): Promise<LoadedSet
   // untrusted project's files inside it.
   const within = trusted ? null : root;
   directories.push(path.join(root, ".ask"));
-  await agents(root, "project AGENTS.md", within);
+  await agents(root, "project AGENTS.md", within, true);
   let dotAskAgents = false;
   for (const file of files) {
     const name = path.basename(file).replace(/\.jsonc?$/, "") as "ask" | "cli" | "tui";
     if (!names.includes(name)) continue;
     const inDotAsk = path.dirname(file) !== root;
-    if (inDotAsk && !dotAskAgents) { dotAskAgents = true; await agents(path.dirname(file), "project .ask/AGENTS.md", within); }
+    if (inDotAsk && !dotAskAgents) { dotAskAgents = true; await agents(path.dirname(file), "project .ask/AGENTS.md", within, true); }
     const [layer] = await readDirectory(path.dirname(file), [name], notes);
     if (!layer) continue;
     const label = `project ${path.relative(root, file)}`;
     const data = trusted ? substitute(layer.data, env) as Plain : restrict(layer.data, label, notes);
-    apply(label, listInstructions(data, path.dirname(file), label, within), [file], { trusted });
+    apply(label, listInstructions(data, path.dirname(file), label, within, true), [file], { trusted });
   }
-  if (!dotAskAgents) await agents(path.join(root, ".ask"), "project .ask/AGENTS.md", within);
+  if (!dotAskAgents) await agents(path.join(root, ".ask"), "project .ask/AGENTS.md", within, true);
 
   const inline = env["ASK_CONFIG_CONTENT"];
   if (inline?.trim()) {

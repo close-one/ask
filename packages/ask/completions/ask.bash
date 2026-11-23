@@ -30,7 +30,7 @@ _ASK_FLAGS="--all-matches --allow-insecure-http --api-key --apply --base-url --c
 --no-instructions --no-next \
 --no-session \
 --quiet --raw --reset \
---session --show-config --check-config \
+--session --show-config --check-config --project-instructions \
 --force --session-max-tokens --show-context --show-session --skill --switch \
 --system --write \
 --system-file \

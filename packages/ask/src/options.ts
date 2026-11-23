@@ -13,6 +13,7 @@ export const OPTIONS = {
   "show-config": { type: "boolean" },
   "check-config": { type: "boolean" },
   "no-instructions": { type: "boolean" },
+  "project-instructions": { type: "boolean" },
   trust: { type: "boolean" },
   untrust: { type: "boolean" },
   file: { type: "string", short: "f", multiple: true },

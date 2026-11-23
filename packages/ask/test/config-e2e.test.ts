@@ -65,10 +65,13 @@ for (const layout of ["src", "dist/src"]) {
     assert.match(folder.stdout, /const safe = true/);
     assert.doesNotMatch(folder.stdout, /private-project-key|private-repository-key/);
 
-    // AGENTS.md from the config directory, then the project root, after the system prompt.
+    // Personal instructions are defaults; project instructions need explicit selection.
     await writeFile(path.join(xdg, "ask", "AGENTS.md"), "personal-rules");
     await writeFile(path.join(cwd, "AGENTS.md"), "project-rules");
-    const withInstructions = await runCli(entry, ["--dry-run", "hello"], cwd, env);
+    const personalOnly = await runCli(entry, ["--no-session", "--dry-run", "hello"], cwd, env);
+    assert.match(JSON.parse(personalOnly.stdout).messages[0].content, /personal-rules/);
+    assert.doesNotMatch(personalOnly.stdout, /project-rules/);
+    const withInstructions = await runCli(entry, ["--project-instructions", "--dry-run", "hello"], cwd, env);
     assert.match(JSON.parse(withInstructions.stdout).messages[0].content,
       /^project-system\n\n<instructions source="[^"]*AGENTS\.md">\npersonal-rules\n<\/instructions>\n\n<instructions source="AGENTS\.md">\nproject-rules\n<\/instructions>$/);
     assert.match(withInstructions.stderr, /-- instructions: .*AGENTS\.md, AGENTS\.md/);

@@ -166,9 +166,12 @@ test("ordinary clicks focus the prompt while mouse controls retain their actions
     ui.transcript.focus();
     const bar = ui.transcript.verticalScrollBar;
     assert.equal(bar.visible, true);
-    await setup.mockMouse.pressDown(bar.x, bar.y + 1); await setup.flush();
+    const scrollTop = ui.transcript.scrollTop;
+    const barX = bar.x + bar.width - 1; // The left columns are padding, not the scrollbar track.
+    await setup.mockMouse.pressDown(barX, bar.y + 1); await setup.flush();
     assert.equal(ui.input.focused, false, "scrollbar interaction must retain control");
-    await setup.mockMouse.release(bar.x, bar.y + 1);
+    await setup.mockMouse.release(barX, bar.y + 1); await setup.flush();
+    assert.ok(ui.transcript.scrollTop < scrollTop, "clicking the scrollbar track must scroll the transcript upward");
     ui.transcript.focus();
     await setup.mockMouse.pressDown(ui.sidebarDivider.x, ui.sidebarDivider.y + 2);
     assert.equal(ui.input.focused, false, "divider interaction must not be overridden");

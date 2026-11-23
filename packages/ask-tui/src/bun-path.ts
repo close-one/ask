@@ -21,10 +21,26 @@ function within(parent: string, child: string): boolean {
   return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
 }
 
+// Inspect markers rather than launching Git from the still-untrusted PATH.
+// A .git file marks a linked worktree or submodule just as a directory does.
+function projectRoot(cwd: string): string {
+  for (let dir = cwd; ; dir = path.dirname(dir)) {
+    try {
+      const marker = statSync(path.join(dir, ".git"));
+      if (marker.isDirectory() || marker.isFile()) return dir;
+    } catch { /* Not a repository marker. */ }
+    if (path.dirname(dir) === dir) return cwd;
+  }
+}
+
+function inNodeModules(file: string): boolean {
+  return file.split(path.sep).some((part) => part.toLowerCase() === "node_modules");
+}
+
 /**
  * `ASK_BUN` (an absolute path) wins. Otherwise search PATH, skipping empty and
- * relative entries and any directory inside the working directory; Windows would
- * otherwise also search the working directory first.
+ * relative entries, node_modules, and paths inside the working directory or its
+ * repository. Check resolved executable paths too, not just PATH directories.
  */
 export function findBun(env: NodeJS.ProcessEnv = process.env, cwd = process.cwd(), platform = process.platform): string | null {
   const explicit = env["ASK_BUN"];
@@ -34,13 +50,16 @@ export function findBun(env: NodeJS.ProcessEnv = process.env, cwd = process.cwd(
     return explicit;
   }
   const workingDirectory = realDirectory(cwd) ?? path.resolve(cwd);
+  const root = projectRoot(workingDirectory);
+  const excluded = (file: string) => within(workingDirectory, file) || within(root, file) || inNodeModules(file);
   const name = platform === "win32" ? "bun.exe" : "bun";
   for (const dir of (env["PATH"] ?? "").split(path.delimiter)) {
-    if (!dir || !path.isAbsolute(dir)) continue;
+    if (!dir || !path.isAbsolute(dir) || excluded(dir)) continue;
     const real = realDirectory(dir);
-    if (real === null || within(workingDirectory, real)) continue;
+    if (real === null || excluded(real)) continue;
     const candidate = path.join(dir, name);
-    if (isExecutable(candidate)) return candidate;
+    const resolved = realDirectory(candidate);
+    if (resolved !== null && !excluded(resolved) && isExecutable(resolved)) return resolved;
   }
   return null;
 }

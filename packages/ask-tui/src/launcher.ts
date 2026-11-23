@@ -16,7 +16,7 @@ let bun: string | null = null;
 try { bun = findBun(); } catch (error) { fail(error instanceof Error ? error.message : String(error)); }
 if (bun === null && process.exitCode !== 1) {
   fail("could not find Bun. Install Bun 1.3.14+ and put it on PATH, or set ASK_BUN to its absolute path. " +
-    "Relative PATH entries and directories inside the current folder are ignored.");
+    "Relative PATH entries, node_modules, and paths inside the current folder or repository are ignored.");
 }
 
 if (bun !== null) {

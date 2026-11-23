@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { access, chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -57,6 +57,63 @@ test("a bun inside the working directory or on a relative PATH entry is never ru
       assert.match((error as { stderr: string }).stderr, /could not find Bun/);
       return true;
     });
+    await assert.rejects(access(marker), { code: "ENOENT" });
+  } finally { await rm(base, { recursive: true, force: true }); }
+});
+
+for (const markerType of ["directory", "file"]) {
+  test(`repository Bun is excluded from a subdirectory (.git ${markerType})`, async () => {
+    const base = await mkdtemp(path.join(tmpdir(), "ask-launcher-"));
+    try {
+      const repo = path.join(base, "repo");
+      const cwd = path.join(repo, "packages", "foo");
+      await mkdir(cwd, { recursive: true });
+      if (markerType === "directory") await mkdir(path.join(repo, ".git"));
+      else await writeFile(path.join(repo, ".git"), "gitdir: /unused/worktree\n");
+      const marker = path.join(base, "repository-bun-ran");
+      const hostile = `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "ran");`;
+      const bins = [path.join(repo, "node_modules", ".bin"), path.join(repo, "bin"), path.join(repo, "sibling")];
+      for (const bin of bins) await fakeBun(bin, hostile);
+      const safe = path.join(base, "safe");
+      await fakeBun(safe);
+      const env = { ...process.env, ASK_BUN: "", PATH: [...bins, safe].join(path.delimiter) };
+      const result = await run(process.execPath, [launcher, "--help"], { cwd, env });
+      assert.equal(JSON.parse(result.stdout).at(-1), "--help");
+      await assert.rejects(run(process.execPath, [launcher], {
+        cwd, env: { ...env, PATH: bins.join(path.delimiter) },
+      }), (error: unknown) => {
+        assert.match((error as { stderr: string }).stderr, /could not find Bun/);
+        return true;
+      });
+      await assert.rejects(access(marker), { code: "ENOENT" });
+    } finally { await rm(base, { recursive: true, force: true }); }
+  });
+}
+
+test("node_modules and symlinks into the repository cannot supply Bun", async () => {
+  const base = await mkdtemp(path.join(tmpdir(), "ask-launcher-"));
+  try {
+    const cwd = path.join(base, "repo");
+    await mkdir(cwd);
+    const marker = path.join(base, "repository-bun-ran");
+    const hostile = `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "ran");`;
+    const repoBin = path.join(cwd, "bin");
+    const repoBun = await fakeBun(repoBin, hostile);
+    const modules = path.join(base, "node_modules", ".bin");
+    await fakeBun(modules, hostile);
+    const linkDir = path.join(base, "linked-dir");
+    await symlink(repoBin, linkDir, "dir");
+    const linkBin = path.join(base, "linked-bin");
+    await mkdir(linkBin);
+    await symlink(repoBun, path.join(linkBin, "bun"));
+    const moduleAlias = path.join(base, "module-alias");
+    await symlink(modules, moduleAlias, "dir");
+    const safe = path.join(base, "safe");
+    await fakeBun(safe);
+    const result = await run(process.execPath, [launcher, "--help"], {
+      cwd, env: { ...process.env, ASK_BUN: "", PATH: [modules, linkDir, linkBin, moduleAlias, safe].join(path.delimiter) },
+    });
+    assert.equal(JSON.parse(result.stdout).at(-1), "--help");
     await assert.rejects(access(marker), { code: "ENOENT" });
   } finally { await rm(base, { recursive: true, force: true }); }
 });

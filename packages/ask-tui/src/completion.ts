@@ -18,6 +18,7 @@ export function createCompletion(renderer: CliRenderer, chat: TuiChat, layout: C
   /** A confirmed choice, not a preview: the UI saves it as the default. */
   themeChosen(name: string, mode: ThemeMode): void;
   addText(text: string, color?: string): void;
+  loadCandidates?: () => Promise<{ readonly paths: readonly string[]; readonly truncated: boolean }>;
 }) {
   const { input, status, picker, pickerMetadata, pickerRows, pickerHint } = layout;
   let candidates: readonly string[] = [];
@@ -33,7 +34,34 @@ export function createCompletion(renderer: CliRenderer, chat: TuiChat, layout: C
   let dismissedAt = "";
   let themeBeforePreview: { name: string; mode: ThemeMode } | null = null;
   let pickerError = "";
+  let candidatesReady = false;
+  let loadingCandidates = false;
   const mention = () => activeMention(input.editBuffer.getTextRange(0, input.cursorOffset));
+
+  function setCandidates(paths: readonly string[], truncated = false) {
+    if (!state.alive) return;
+    candidatesReady = true;
+    candidates = paths; pickerError = truncated ? "Index capped; type an exact path for missing files." : "";
+    if (truncated) actions.addText("Mention index reached its cap; exact @paths still work.", "#fcd34d");
+    refresh();
+  }
+  function setIndexError(message: string) {
+    if (!state.alive) return;
+    candidatesReady = true; pickerError = terminalField(message); refresh();
+  }
+  async function loadCandidates() {
+    if (loadingCandidates || candidatesReady || !actions.loadCandidates) return;
+    loadingCandidates = true;
+    try {
+      const index = await actions.loadCandidates();
+      if (state.alive) setCandidates(index.paths, index.truncated);
+    } catch (error) {
+      if (state.alive) setIndexError(`Mention index unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      loadingCandidates = false;
+      if (state.alive) refresh();
+    }
+  }
 
   function contextItems(kind: "context" | "detach" | "unskill"): PopupItem[] {
     const items: PopupItem[] = [];
@@ -107,6 +135,7 @@ export function createCompletion(renderer: CliRenderer, chat: TuiChat, layout: C
         }), query);
       } else if (command[1] === "attach") {
         mode = "files";
+        void loadCandidates();
         matches = filterPopupItems(candidates.filter((value) => isFileCandidateVisible(value, query)).map((value) => {
           const attached = fileIsAttached(value);
           return { kind: "attach", value, label: `${attached ? "✓ " : "  "}${value}`, description: attached ? "Attached · select to detach" : value.endsWith("/") ? "Attach folder" : "Attach file" };
@@ -127,6 +156,7 @@ export function createCompletion(renderer: CliRenderer, chat: TuiChat, layout: C
       const current = mention();
       if (!current) { matches = []; picker.visible = false; return; }
       mode = "mention";
+      void loadCandidates();
       matches = candidates.filter((candidate) => isFileCandidateVisible(candidate, current.query))
         .map((candidate) => ({ candidate, rank: current.query ? rankMatch(candidate.replace(/\/$/, ""), current.query) : 0 }))
         .filter((item) => item.rank !== null)
@@ -173,11 +203,11 @@ export function createCompletion(renderer: CliRenderer, chat: TuiChat, layout: C
           ? [matches.some((item) => item.kind === "detach") ? "  … more files (↑/↓)" : "  No matching files."] : []),
       ];
     } else rows = matches.length ? visible.map(renderItem)
-      : [mode === "mention" ? pickerError || "No indexed matches; you can still type an exact @path."
+      : [mode === "mention" ? loadingCandidates ? "Loading files/folders…" : pickerError || "No indexed matches; you can still type an exact @path."
         : mode === "skills" ? loadingSkills ? "Loading skills…" : skillLoadError || "No matching skills."
           : mode === "unskill" ? chat.activeSkillNames.length ? "No matching skills." : "No skills attached."
             : mode === "detach" ? hasFiles ? "No matching files." : "No files attached."
-              : mode === "files" ? pickerError || "No matching files/folders."
+              : mode === "files" ? loadingCandidates ? "Loading files/folders…" : pickerError || "No matching files/folders."
                 : mode === "themes" ? "No matching themes." : "No matching commands."];
     const actionRows = new Set(visible.map(renderItem));
     const selectedRow = matches[selected] ? renderItem(matches[selected]!) : undefined;
@@ -279,6 +309,7 @@ export function createCompletion(renderer: CliRenderer, chat: TuiChat, layout: C
     refresh, openManager,
     contentChanged() { dismissedAt = ""; refresh(); },
     get loadingSkills() { return loadingSkills; },
+    get loadingCandidates() { return loadingCandidates; },
     handleKey(key: KeyEvent) {
       if (!state.working && key.sequence === "@" && dismissedAt && mention()?.prefix === dismissedAt) {
         key.preventDefault(); dismissedAt = ""; refresh(); return;
@@ -299,13 +330,7 @@ export function createCompletion(renderer: CliRenderer, chat: TuiChat, layout: C
         key.preventDefault(); accept(key.name === "return");
       }
     },
-    setCandidates(paths: readonly string[], truncated = false) {
-      if (!state.alive) return;
-      candidates = paths; pickerError = truncated ? "Index capped; type an exact path for missing files." : "";
-      if (truncated) actions.addText("Mention index reached its cap; exact @paths still work.", "#fcd34d");
-      refresh();
-    },
-    setIndexError(message: string) { pickerError = terminalField(message); refresh(); },
+    setCandidates, setIndexError,
     dispose() { invalidateSkills(); skillCatalog = []; candidates = []; matches = []; },
   };
 }

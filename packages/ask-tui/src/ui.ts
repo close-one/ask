@@ -15,6 +15,8 @@ import { dispatchCommand } from "./commands.ts";
 export { TUI_HELP } from "./commands.ts";
 export { SIDEBAR_MIN_WIDTH, SIDEBAR_MIN_COLUMNS, CHAT_MIN_COLUMNS } from "./layout.ts";
 export interface TuiUIOptions {
+  /** Lazy, fixed file discovery; invoked only by the file/mention picker. */
+  readonly loadCandidates?: () => Promise<{ readonly paths: readonly string[]; readonly truncated: boolean }>;
   readonly theme?: string;
   readonly updateView?: UpdateView;
   readonly createClipboard?: ClipboardFactory;
@@ -66,7 +68,10 @@ export function mountChatUI(renderer: CliRenderer, chat: TuiChat, model: string,
       addText(`Theme not saved: ${error instanceof Error ? error.message : String(error)}`, "#fda4af");
     });
   }
-  completion = createCompletion(renderer, chat, layout, theme, state, { submit, refreshSummary, applyTheme, addText, themeChosen });
+  completion = createCompletion(renderer, chat, layout, theme, state, {
+    submit, refreshSummary, applyTheme, addText, themeChosen,
+    ...(options.loadCandidates ? { loadCandidates: options.loadCandidates } : {}),
+  });
   const review = (paths: readonly string[]) => view.review(chat.reviewDetails(paths));
   const syncUpdates = () => view.syncUpdates(chat.pendingReviews, state.working);
   function readyStatus() {
@@ -186,6 +191,7 @@ export function mountChatUI(renderer: CliRenderer, chat: TuiChat, model: string,
     get working() { return state.working; },
     get pasting() { return clipboard.pasting; },
     get loadingSkills() { return completion!.loadingSkills; },
+    get loadingCandidates() { return completion!.loadingCandidates; },
     get theme() { return { name: theme.name, mode: theme.mode }; },
   };
 }

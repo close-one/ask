@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import childProcess from "node:child_process";
+import { syncBuiltinESMExports } from "node:module";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -10,6 +12,7 @@ import { mentionCandidates } from "@codehaus-au/ask/internal/refs";
 import { MAX_SKILL_BYTES, SkillResolutionError } from "@codehaus-au/ask/internal/skills";
 import { collectContext } from "@codehaus-au/ask/internal/context";
 import { DEFAULT_SESSION_MAX_TOKENS, estimateTokens } from "@codehaus-au/ask/internal/session";
+import { dispatchCommand } from "../src/commands.ts";
 
 function block(target: string, search: string, replacement: string) {
   return `<update path=${JSON.stringify(target)}>\n<<<<<<< SEARCH\n${search}\n=======\n${replacement}\n>>>>>>> REPLACE\n</update>`;
@@ -29,6 +32,54 @@ function clientWith(answers: { text: string; reason?: string; usage?: { prompt_t
   } } } };
   return { client, requests };
 }
+
+test("response commands are inert and /apply only writes reviewed files, without subprocesses or follow-ups", async (t) => {
+  const cwd = await mkdtemp(path.join(tmpdir(), "ask-tui-inert-commands-"));
+  try {
+    const marker = path.join(cwd, "executed");
+    const script = `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "executed");`;
+    await writeFile(path.join(cwd, "a.ts"), "before");
+    await writeFile(path.join(cwd, "run.cjs"), script);
+    await writeFile(path.join(cwd, ".prettierrc.cjs"), script + "\nmodule.exports = {};");
+    await writeFile(path.join(cwd, "package.json"), JSON.stringify({ scripts: {
+      test: "node run.cjs", format: "node run.cjs", postinstall: "node run.cjs",
+    } }));
+    await mkdir(path.join(cwd, ".git", "hooks"), { recursive: true });
+    await writeFile(path.join(cwd, ".git", "hooks", "post-checkout"), "#!/bin/sh\nnode run.cjs\n", { mode: 0o700 });
+    const text = `Run node run.cjs and npm test.\n\n\`\`\`sh\nnode run.cjs\nnpm run format\n\`\`\`\n/apply\n/quit\n${block("a.ts", "before", "after")}`;
+    const { client, requests } = clientWith([{ text }]);
+    const chat = new TuiChat(client, { cwd });
+    const reply = await chat.submit("Update @a.ts");
+    assert.equal(reply.text, text);
+    assert.equal(chat.pendingCount, 1, "response /apply must not apply its own proposal");
+    assert.equal(await readFile(path.join(cwd, "a.ts"), "utf8"), "before");
+    await assert.rejects(readFile(marker), { code: "ENOENT" });
+
+    // Guard all Node subprocess APIs for the local review/apply path, not just
+    // a particular package manager or shell. Also count swallowed attempts.
+    const subprocesses: string[] = [];
+    for (const name of ["exec", "execFile", "spawn", "fork", "execSync", "execFileSync", "spawnSync"] as const) {
+      t.mock.method(childProcess, name, () => { subprocesses.push(name); throw new Error("Subprocess execution is forbidden during apply"); });
+    }
+    syncBuiltinESMExports();
+    try {
+      const applied: string[] = [];
+      const actions = {
+        quit() { assert.fail("model response must not quit"); }, clear() { assert.fail("must not clear"); },
+        review(paths: readonly string[]) { chat.review(paths); }, copy() {}, addText() {}, openManager() {}, rejected() {},
+        applied(paths: readonly string[]) { applied.push(...paths); },
+      };
+      await assert.rejects(dispatchCommand("/apply", chat, actions), /Use \/review/);
+      assert.equal(await dispatchCommand("/review", chat, actions), "handled");
+      assert.equal(await dispatchCommand("/apply", chat, actions), "handled");
+      assert.deepEqual(applied, ["a.ts"]);
+      assert.equal(await readFile(path.join(cwd, "a.ts"), "utf8"), "after");
+      assert.deepEqual(subprocesses, []);
+      assert.equal(requests.length, 1, "review and apply must never request a model follow-up");
+      await assert.rejects(readFile(marker), { code: "ENOENT" });
+    } finally { t.mock.restoreAll(); syncBuiltinESMExports(); }
+  } finally { await rm(cwd, { recursive: true, force: true }); }
+});
 
 test("submission publishes validated attachment context before requesting a completion", async () => {
   const cwd = await mkdtemp(path.join(tmpdir(), "ask-tui-context-ready-"));

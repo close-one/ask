@@ -313,7 +313,8 @@ export class TuiChat {
     for (const update of this.selectPending(paths)) this.reviewed.delete(update.path);
   }
 
-  /** Write reviewed proposals (all when none are named). Others stay pending. */
+  /** Write reviewed proposals only: no commands, hooks, formatting, tests or model follow-up.
+   * All when none are named; others stay pending. */
   async apply(paths: readonly string[] = []): Promise<string[]> {
     if (this.busy) throw new Error("A request or write is already in progress.");
     const selected = this.selectPending(paths);

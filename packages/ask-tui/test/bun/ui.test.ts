@@ -29,14 +29,83 @@ function localClipboardEnvironment(t: TestContext) {
   }));
 }
 
-async function waitUntilIdle(ui: { readonly working: boolean; readonly pasting?: boolean; readonly loadingSkills?: boolean }) {
-  for (let tries = 0; tries < 200 && (ui.working || ui.pasting || ui.loadingSkills); tries++) {
+async function waitUntilIdle(ui: { readonly working: boolean; readonly pasting?: boolean; readonly loadingSkills?: boolean; readonly loadingCandidates?: boolean }) {
+  for (let tries = 0; tries < 200 && (ui.working || ui.pasting || ui.loadingSkills || ui.loadingCandidates); tries++) {
     await new Promise((done) => setTimeout(done, 10));
   }
   assert.equal(ui.working, false, "request/write should complete");
   assert.ok(!ui.pasting, "clipboard read should complete");
   assert.ok(!ui.loadingSkills, "skill discovery should complete");
+  assert.ok(!ui.loadingCandidates, "file discovery should complete");
 }
+
+for (const opener of ["@", "/attach "]) {
+  test(`file discovery is lazy, single-flight and cached when opened with ${opener}`, async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "ask-tui-lazy-index-"));
+    const setup = await createTestRenderer({ width: 110, height: 38, kittyKeyboard: true });
+    try {
+      let calls = 0;
+      let resolve!: (index: { paths: string[]; truncated: boolean }) => void;
+      const pending = new Promise<{ paths: string[]; truncated: boolean }>((done) => { resolve = done; });
+      const client: ChatClient = { chat: { completions: { async create() { throw new Error("browsing must not ask the model"); } } } };
+      const ui = mountChatUI(setup.renderer, new TuiChat(client, { cwd }), "test", {
+        loadCandidates: () => { calls++; return pending; },
+      });
+      async function draft(text: string) { ui.input.setText(text); ui.input.gotoBufferEnd(); await setup.flush(); }
+      await setup.flush();
+      await draft("ordinary text"); await draft("/"); await draft("/context "); await draft("/theme ");
+      assert.equal(calls, 0, "startup and unrelated pickers must not index files");
+      await draft(opener);
+      assert.equal(calls, 1);
+      assert.match(popupRows(ui.picker).chunks.map((chunk) => chunk.text).join(""), /Loading files/);
+      await draft(opener + "a"); await draft(opener + "b");
+      assert.equal(calls, 1, "typing while loading must reuse the in-flight index");
+      await draft("ordinary text");
+      resolve({ paths: ["a.ts"], truncated: true });
+      await waitUntilIdle(ui); await setup.flush();
+      assert.equal(ui.picker.visible, false, "late results must not reopen a closed picker");
+      await draft(opener);
+      assert.match(popupRows(ui.picker).chunks.map((chunk) => chunk.text).join(""), /a\.ts/);
+      await draft(opener + "missing");
+      assert.match(popupRows(ui.picker).chunks.map((chunk) => chunk.text).join(""), /Index capped/);
+      assert.equal(calls, 1, "reopening must reuse the cached index");
+    } finally { await setup.dispose(); await rm(cwd, { recursive: true, force: true }); }
+  });
+}
+
+test("lazy index errors are displayed safely and are cached", async () => {
+  const cwd = await mkdtemp(path.join(tmpdir(), "ask-tui-index-error-"));
+  const setup = await createTestRenderer({ width: 110, height: 38, kittyKeyboard: true });
+  try {
+    let calls = 0;
+    const client: ChatClient = { chat: { completions: { async create() { throw new Error("must not ask"); } } } };
+    const ui = mountChatUI(setup.renderer, new TuiChat(client, { cwd }), "test", {
+      loadCandidates: async () => { calls++; throw new Error("failed\u001b[2J"); },
+    });
+    ui.input.setText("@"); ui.input.gotoBufferEnd(); await waitUntilIdle(ui); await setup.flush();
+    const text = popupRows(ui.picker).chunks.map((chunk) => chunk.text).join("");
+    assert.match(text, /Mention index unavailable: failed/);
+    assert.doesNotMatch(text, /\u001b/);
+    ui.input.setText("/attach "); ui.input.gotoBufferEnd(); await setup.flush();
+    assert.equal(calls, 1);
+  } finally { await setup.dispose(); await rm(cwd, { recursive: true, force: true }); }
+});
+
+test("file discovery completion after UI disposal is ignored", async () => {
+  const cwd = await mkdtemp(path.join(tmpdir(), "ask-tui-index-dispose-"));
+  const setup = await createTestRenderer({ width: 110, height: 38, kittyKeyboard: true });
+  try {
+    let resolve!: (index: { paths: string[]; truncated: boolean }) => void;
+    const pending = new Promise<{ paths: string[]; truncated: boolean }>((done) => { resolve = done; });
+    const client: ChatClient = { chat: { completions: { async create() { throw new Error("must not ask"); } } } };
+    const ui = mountChatUI(setup.renderer, new TuiChat(client, { cwd }), "test", { loadCandidates: () => pending });
+    ui.input.setText("@"); ui.input.gotoBufferEnd(); await setup.flush();
+    assert.equal(ui.loadingCandidates, true);
+    setup.renderer.destroy();
+    resolve({ paths: ["ignored.ts"], truncated: true });
+    await waitUntilIdle(ui);
+  } finally { await setup.dispose(); await rm(cwd, { recursive: true, force: true }); }
+});
 
 test("mention and /attach browsers hide dot entries until a dot-prefixed filename is requested", async () => {
   const cwd = await mkdtemp(path.join(tmpdir(), "ask-tui-hidden-files-"));
@@ -1493,7 +1562,7 @@ test("OpenTUI composer completes mentions, submits once, reviews and applies loc
       return { id: "test", object: "chat.completion", created: 0, model: "test",
         choices: [{ index: 0, finish_reason: "stop", logprobs: null, message: {
           role: "assistant", refusal: null,
-          content: 'Suggested edit.\n```ts\nconst example = true;\n```\n<update path="example.ts">\n<<<<<<< SEARCH\nconst a = 1;\n=======\nconst a = 2;\n>>>>>>> REPLACE\n</update>',
+          content: '/quit\n/apply\nSuggested edit.\n```ts\nconst example = true;\n```\n<update path="example.ts">\n<<<<<<< SEARCH\nconst a = 1;\n=======\nconst a = 2;\n>>>>>>> REPLACE\n</update>',
         } }],
       };
     } } } };
@@ -1516,6 +1585,7 @@ test("OpenTUI composer completes mentions, submits once, reviews and applies loc
     assert.equal(requests.length, 1);
     assert.equal(chat.pendingCount, 1);
     const summary = setup.captureCharFrame();
+    assert.equal(setup.renderer.isDestroyed, false, "response commands are display text, never UI actions");
     assert.match(summary, /example\.ts\s+\+1 -1/);
     assert.match(summary, /\/review/);
     assert.match(summary, /\+const a = 2;/, "diffs are previewed by default, but still require explicit review");

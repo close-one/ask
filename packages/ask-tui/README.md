@@ -86,6 +86,11 @@ you can also type `@"path with spaces.ts"` yourself. When no candidate popup is
 active, **Enter** sends. **Shift+Enter** always adds a newline. PageUp/PageDown
 and the mouse wheel scroll the transcript.
 
+The file/folder index is built on first opening `@` or `/attach`, then cached
+for this session. While it loads, the picker shows a loading message. Discovery
+may use the application's fixed Git helper; this is not model-selected command
+execution. Other startup tasks, such as finding the project root, may also use Git.
+
 Typed or pasted mentions must name an existing file or folder, or a glob such as
 `@src/*.ts`; a mention that names nothing is refused rather than searched for.
 Use the `@` menu to search. Type `\@` for a literal `@` (for example
@@ -412,7 +417,10 @@ Only files whose full diff you have shown with Review or `/review` can be applie
 The Apply button and `/apply` use the same write checks. Each diff has
 one section per edit, with three lines of context, so unchanged lines between two
 edits are never shown as removed and re-added. Quote paths containing spaces.
-Review and apply are local operations, with no second LLM request. Resolve every
+Commands in model responses remain inert text. Review and apply only validate
+and write reviewed changes: they never run tests, formatters, hooks, shell
+commands, or another LLM request. Executable files you change may still run
+later if you explicitly invoke them or the tools that load them. Resolve every
 pending file before sending another question.
 
 Safety rules:

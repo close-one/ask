@@ -5,7 +5,7 @@
 #
 # Prints the resulting COMPREPLY entries, one per line.
 
-# shellcheck source=completions/ask.bash
+# shellcheck source=../completions/ask.bash source-path=SCRIPTDIR
 source "$1" || exit 1
 cword=$2
 shift 2

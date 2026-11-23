@@ -17,6 +17,7 @@ import { constants, type Dirent } from "node:fs";
 import { open, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
+import { customConfigDir, environmentDirectory } from "./config.ts";
 
 /** A SKILL.md larger than this is refused rather than blowing the context. */
 export const MAX_SKILL_BYTES = 128 * 1024;
@@ -103,13 +104,13 @@ export function parseFrontMatter(text: string): FrontMatter {
 export function skillSearchPaths(
   cwd: string = process.cwd(),
   env: NodeJS.ProcessEnv = process.env,
-  /** --config <dir>; defaults to $ASK_CONFIG. Relative to `cwd`. */
-  configDir: string | undefined = env["ASK_CONFIG"],
+  /** Explicit --config <dir>, which alone may be relative to `cwd`. */
+  configDir?: string,
 ): string[] {
   const paths: string[] = [];
 
   for (const entry of (env["ASK_SKILLS_DIR"] ?? "").split(path.delimiter)) {
-    if (entry.trim().length > 0) paths.push(path.resolve(entry));
+    if (entry.trim().length > 0) paths.push(environmentDirectory(entry, "ASK_SKILLS_DIR"));
   }
 
   let dir = path.resolve(cwd);
@@ -121,7 +122,8 @@ export function skillSearchPaths(
     dir = parent;
   }
 
-  if (configDir) paths.push(path.join(path.resolve(cwd, configDir), "skills"));
+  const custom = customConfigDir(cwd, env, configDir);
+  if (custom) paths.push(path.join(custom, "skills"));
 
   const xdg = env["XDG_CONFIG_HOME"];
   paths.push(

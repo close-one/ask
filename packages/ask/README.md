@@ -100,7 +100,7 @@ chmod 600 ~/.config/ask/ask.jsonc
 **Layers**, lowest precedence first; later layers win:
 
 1. `~/.config/ask/` (or `$XDG_CONFIG_HOME/ask/`), your global config
-2. `--config <dir>` or `$ASK_CONFIG`, a custom config directory
+2. `--config <dir>` or `$ASK_CONFIG`, a custom config directory (`ASK_CONFIG` must be absolute or start with `~/`; only `--config` may be cwd-relative)
 3. `ask.json(c)` in the project root (the Git work tree, or the current directory)
 4. `.ask/` in the project root (`ask`, `cli` and `tui` files)
 5. `$ASK_CONFIG_CONTENT`, inline JSON with the same keys, plus `cli` and `tui` sections
@@ -783,7 +783,7 @@ alongside your files. `--skill` is repeatable and composes in the order given.
 
 | Behaviour | Detail |
 | --- | --- |
-| Where skills come from | `$ASK_SKILLS_DIR` (colon-separated), then `.ask/skills` and `.agents/skills` **in the current directory and every ancestor**, then `<config dir>/skills` for a `--config` directory or `$ASK_CONFIG`, then `~/.config/ask/skills` and `~/.claude/skills`. First match wins, so a repository-local skill shadows a personal one |
+| Where skills come from | `$ASK_SKILLS_DIR` (colon-separated; each entry must be absolute or start with `~/`), then `.ask/skills` and `.agents/skills` **in the current directory and every ancestor**, then `<config dir>/skills` for a `--config` directory or `$ASK_CONFIG`, then `~/.config/ask/skills` and `~/.claude/skills`. First match wins, so a repository-local skill shadows a personal one |
 | Ancestor search | working in `repo/packages/thing` finds `repo/.agents/skills`, the way git finds its root — no configuration needed for a workspace-level skills directory |
 | Nesting | grouping directories are walked to 5 levels, which reaches a synced layout like `skills/synced/<bucket-id>/<skill>/SKILL.md`; symlink loops are guarded, and `assets/`, `scripts/`, `resources/`, `templates/`, `node_modules` and dot-directories are skipped |
 | The single-file trade-off | inside a directory dedicated to skills, any `.md` counts as one, so a scratch file will show up in `ask /skills` until you remove it |

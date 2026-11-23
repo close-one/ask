@@ -266,6 +266,26 @@ export function globalConfigDir(env: NodeJS.ProcessEnv = process.env): string {
   return path.join(xdg && path.isAbsolute(xdg) ? xdg : path.join(homedir(), ".config"), "ask");
 }
 
+/** Persistent environment paths must not select files relative to a repository. */
+export function environmentDirectory(value: string, name: string): string {
+  if (value === "~" || value.startsWith("~/")) return path.resolve(homedir(), value.slice(2));
+  if (!path.isAbsolute(value)) {
+    throw new ConfigFileError(`${name} must be an absolute path or start with ~/` +
+      (name === "ASK_CONFIG" ? "; use --config for a cwd-relative config directory." : "."));
+  }
+  return value;
+}
+
+/** Only an explicit --config may resolve relative to cwd; it overrides ASK_CONFIG. */
+export function customConfigDir(cwd: string, env: NodeJS.ProcessEnv, configDir?: string): string | undefined {
+  if (configDir !== undefined) {
+    if (!configDir) return undefined;
+    return configDir === "~" || configDir.startsWith("~/")
+      ? path.resolve(homedir(), configDir.slice(2)) : path.resolve(cwd, configDir);
+  }
+  return env["ASK_CONFIG"] ? environmentDirectory(env["ASK_CONFIG"], "ASK_CONFIG") : undefined;
+}
+
 /** Like ssh, refuse a file that someone else could have written. */
 async function unsafeReason(file: string): Promise<string | null> {
   const info = await stat(file);
@@ -670,6 +690,7 @@ function pairEndpoint(target: Plain, layer: Plain, label: string, sources: Map<s
 export async function loadSettings(options: LoadOptions = {}): Promise<LoadedSettings> {
   const env = options.env ?? process.env;
   const cwd = options.cwd ?? process.cwd();
+  const custom = customConfigDir(cwd, env, options.configDir);
   const notes: string[] = [];
   const instructions: InstructionEntry[] = [];
   /** A directory's AGENTS.md, by convention. Missing is fine. */
@@ -732,9 +753,8 @@ export async function loadSettings(options: LoadOptions = {}): Promise<LoadedSet
   }
 
   const directories = [global];
-  const custom = options.configDir ?? env["ASK_CONFIG"];
   if (custom) {
-    const dir = path.resolve(cwd, custom);
+    const dir = custom;
     directories.push(dir);
     if (!await stat(dir).then((info) => info.isDirectory(), () => false)) {
       throw new ConfigFileError(`${options.configDir ? "--config" : "ASK_CONFIG"} ${terminalField(dir)} is not a directory`);

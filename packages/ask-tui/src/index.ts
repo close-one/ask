@@ -70,7 +70,7 @@ async function main() {
   }
   const cwd = process.cwd();
   if (values["list-skills"]) {
-    const roots = skillSearchPaths(cwd, process.env, values.config ?? process.env["ASK_CONFIG"]);
+    const roots = skillSearchPaths(cwd, process.env, values.config);
     const available = await discoverSkills(roots);
     process.stdout.write([
       ...available.map((skill) => `${terminalField(skill.name)} — ${terminalField(skill.description)}`),
@@ -141,7 +141,7 @@ async function main() {
     cwd, model, baseURL, system: settings.system ?? "",
     maxTokens: settings.maxTokens, temperature: settings.temperature,
     contextWindow: settings.tui.contextWindow,
-    skillRoots: skillSearchPaths(cwd, process.env, values.config ?? process.env["ASK_CONFIG"]),
+    skillRoots: skillSearchPaths(cwd, process.env, values.config),
     instructions: async () => renderInstructions((await readInstructions()).files),
   });
   await chat.selectSkills(values.skill ?? []);

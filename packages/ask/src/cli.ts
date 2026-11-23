@@ -545,7 +545,7 @@ async function printSessions(scope: string, active: string, paint: Palette): Pro
 
 /** List skills, optionally filtered, without calling the API. */
 async function printSkills(term: string, paint: Palette, configDir: string | undefined): Promise<void> {
-  const roots = skillSearchPaths(process.cwd(), process.env, configDir ?? process.env["ASK_CONFIG"]);
+  const roots = skillSearchPaths(process.cwd(), process.env, configDir);
   const all = await discoverSkills(roots);
   const shown = filterSkills(all, term);
 
@@ -578,7 +578,7 @@ async function printSkills(term: string, paint: Palette, configDir: string | und
 async function gatherSkills(terms: readonly string[], configDir: string | undefined): Promise<LoadedSkill[]> {
   if (terms.length === 0) return [];
 
-  const available = await discoverSkills(skillSearchPaths(process.cwd(), process.env, configDir ?? process.env["ASK_CONFIG"]));
+  const available = await discoverSkills(skillSearchPaths(process.cwd(), process.env, configDir));
   const loaded: LoadedSkill[] = [];
   const seen = new Set<string>();
 

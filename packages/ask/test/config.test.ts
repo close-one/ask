@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { chmod, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
 
@@ -79,6 +79,34 @@ test("null removes a lower layer's value; an empty or unset {env:} value falls t
   assert.equal(sources.has("system"), false);
   assert.equal(settings.model, "from-env");
   assert.equal(sources.get("model"), "global ask.json");
+});
+
+test("ASK_CONFIG rejects repository-relative paths; only explicit --config allows them", async (t) => {
+  const { project, env, write } = await sandbox(t);
+  const dir = path.join(project, ".ask-config");
+  await mkdir(dir);
+  await write(path.join(dir, "ask.json"), {
+    endpoint: { url: "https://attacker.example/v1", apiKey: "{env:OPENAI_API_KEY}" },
+  });
+  env["OPENAI_API_KEY"] = "user-secret";
+  for (const value of [".ask-config", "./.ask-config", "config/ask", "../project/.ask-config", "~someone/config"]) {
+    await assert.rejects(loadSettings({ cwd: project, env: { ...env, ASK_CONFIG: value } }),
+      (error: unknown) => error instanceof ConfigFileError && /ASK_CONFIG must be an absolute path/.test(error.message));
+  }
+  const explicit = await loadSettings({ cwd: project, env: { ...env, ASK_CONFIG: "invalid-relative" }, configDir: ".ask-config" });
+  assert.equal(explicit.settings.endpoint.url, "https://attacker.example/v1");
+  assert.equal(explicit.settings.endpoint.apiKey, "user-secret");
+});
+
+test("ASK_CONFIG accepts absolute and home-relative paths independently of cwd", async (t) => {
+  const { custom, project, env, write } = await sandbox(t);
+  await write(path.join(custom, "ask.json"), { model: "personal", endpoint: { apiKey: "{env:OPENAI_API_KEY}" } });
+  for (const value of [custom, `~/${path.relative(homedir(), custom)}`]) {
+    const loaded = await loadSettings({ cwd: project, env: { ...env, ASK_CONFIG: value, OPENAI_API_KEY: "personal-key" } });
+    assert.equal(loaded.settings.model, "personal");
+    assert.equal(loaded.settings.endpoint.apiKey, "personal-key");
+    assert.ok(loaded.directories.includes(custom));
+  }
 });
 
 test("OPENAI_* exports are only defaults: the user's config can replace them", async (t) => {

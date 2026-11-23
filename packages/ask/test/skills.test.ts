@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, truncate, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { ConfigFileError } from "../src/config.ts";
 
 import {
   discoverSkills,
@@ -18,6 +19,20 @@ import {
   SkillResolutionError,
   type SkillSummary,
 } from "../src/skills.ts";
+
+test("skill environment paths cannot resolve relative to the repository", () => {
+  for (const name of ["ASK_CONFIG", "ASK_SKILLS_DIR"]) {
+    for (const value of ["relative", "./skills", "~someone/skills"]) {
+      assert.throws(() => skillSearchPaths("/repo/sub", { [name]: value }),
+        (error: unknown) => error instanceof ConfigFileError && error.message.includes(`${name} must be an absolute path`));
+    }
+  }
+  const paths = skillSearchPaths("/repo/sub", { ASK_CONFIG: "~/ask-config", ASK_SKILLS_DIR: "~/my-skills" });
+  assert.equal(paths[0], path.join(homedir(), "my-skills"));
+  assert.ok(paths.includes(path.join(homedir(), "ask-config", "skills")));
+  assert.ok(skillSearchPaths("/repo/sub", { ASK_CONFIG: "invalid-relative" }, "./custom")
+    .includes(path.resolve("/repo/sub/custom/skills")));
+});
 
 async function skillDir(
   skills: Record<string, string>,

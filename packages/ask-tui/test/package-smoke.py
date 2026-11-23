@@ -123,7 +123,10 @@ def main():
             wait_for(lambda: b"/review to inspect" in output, "completion and proposal summary")
             assert target.read_text() == "const x = 1;\n", "proposal wrote without approval"
             os.write(master, b"/review\r")
-            wait_for(lambda: b"+const x = 2;" in output, "diff review")
+            # The proposal preview already contains the diff. Wait for the
+            # review-specific confirmation before sending the next command.
+            wait_for(lambda: b"Review the proposed diffs above." in output, "diff review")
+            assert target.read_text() == "const x = 1;\n", "review wrote without approval"
             os.write(master, b"/apply\r")
             wait_for(lambda: target.read_text() == "const x = 2;\n", "approved write")
             assert len(requests) == 3, "expected two transport retries, without local approval making another request"

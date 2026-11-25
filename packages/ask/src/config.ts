@@ -25,7 +25,8 @@
 // the files, so a changed file needs trusting again.
 
 import { createHash } from "node:crypto";
-import { mkdir, readFile, realpath, rename, stat, writeFile } from "node:fs/promises";
+import { constants, type Stats } from "node:fs";
+import { mkdir, open, readFile, realpath, rename, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { gitRoot } from "./git.ts";
@@ -208,7 +209,7 @@ function validate(value: unknown, shape: Shape, where: string, notes: string[], 
   for (const [key, raw] of Object.entries(value)) {
     const name = prefix ? `${prefix}.${key}` : key;
     if (key === "$schema" && !prefix) continue;
-    const kind = shape[key];
+    const kind = Object.hasOwn(shape, key) ? shape[key] : undefined;
     if (kind === undefined) { notes.push(`${where}: unknown setting ${terminalField(name)} (ignored)`); continue; }
     if (raw === null) { out[key] = null; continue; }
     out[key] = typeof kind === "string"
@@ -287,14 +288,31 @@ export function customConfigDir(cwd: string, env: NodeJS.ProcessEnv, configDir?:
 }
 
 /** Like ssh, refuse a file that someone else could have written. */
-async function unsafeReason(file: string): Promise<string | null> {
-  const info = await stat(file);
+function unsafeReason(info: Stats): string | null {
   if (!info.isFile()) return "not a regular file";
   if (process.platform === "win32") return null;
   if (info.mode & 0o002) return "writable by every user (run chmod o-w on it)";
   const uid = process.getuid?.();
   if (uid !== undefined && info.uid !== uid && info.uid !== 0) return "owned by another user";
   return null;
+}
+
+async function readConfigFile(file: string): Promise<{ refused: string } | { text: string; mode: number }> {
+  // Check and read the same opened file. Non-blocking open lets us reject FIFOs.
+  try {
+    const handle = await open(file, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
+    try {
+      const info = await handle.stat();
+      const refused = unsafeReason(info);
+      if (refused) return { refused };
+      return { text: await handle.readFile("utf8"), mode: info.mode & 0o777 };
+    } finally {
+      await handle.close();
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EISDIR") return { refused: "not a regular file" };
+    throw error;
+  }
 }
 
 async function exists(file: string): Promise<boolean> {
@@ -318,9 +336,9 @@ async function readDirectory(dir: string, names: readonly ("ask" | "cli" | "tui"
   for (const entry of FILES.filter((candidate) => names.includes(candidate.name))) {
     const file = await findFile(dir, entry.name);
     if (!file) continue;
-    const refused = await unsafeReason(file);
-    if (refused) { notes.push(`not reading ${terminalField(file)}: ${refused}`); continue; }
-    const parsed = parseJsonc(await readFile(file, "utf8"), file);
+    const config = await readConfigFile(file);
+    if ("refused" in config) { notes.push(`not reading ${terminalField(file)}: ${config.refused}`); continue; }
+    const parsed = parseJsonc(config.text, file);
     if (entry.section === null && isPlain(parsed) && ("cli" in parsed || "tui" in parsed)) {
       throw new ConfigFileError(`${terminalField(file)}: put CLI and TUI settings in cli.json and tui.json`);
     }
@@ -457,7 +475,8 @@ export function schemaUrl(name: "ask" | "cli" | "tui"): string {
 export async function saveGlobalSetting(
   name: "ask" | "cli" | "tui", key: string, value: unknown, env: NodeJS.ProcessEnv = process.env,
 ): Promise<string> {
-  const kind = CONFIG_SHAPES[name][key];
+  const shape = CONFIG_SHAPES[name];
+  const kind = Object.hasOwn(shape, key) ? shape[key] : undefined;
   if (typeof kind !== "string") throw new ConfigFileError(`${key} is not a ${name}.json setting`);
   checkValue(kind, value, `${name}.json: ${key}`);
   const dir = globalConfigDir(env);
@@ -466,12 +485,11 @@ export async function saveGlobalSetting(
   let text: string;
   let mode = 0o600;
   if (existing) {
-    const refused = await unsafeReason(existing);
-    if (refused) throw new ConfigFileError(`not writing ${terminalField(existing)}: ${refused}`);
-    mode = (await stat(existing)).mode & 0o777;
-    const current = await readFile(existing, "utf8");
-    parseJsonc(current, existing);
-    text = setTopLevelKey(current, key, value);
+    const config = await readConfigFile(existing);
+    if ("refused" in config) throw new ConfigFileError(`not writing ${terminalField(existing)}: ${config.refused}`);
+    mode = config.mode;
+    parseJsonc(config.text, existing);
+    text = setTopLevelKey(config.text, key, value);
   } else {
     await mkdir(dir, { recursive: true, mode: 0o700 });
     text = `{\n  "$schema": ${JSON.stringify(schemaUrl(name))},\n  ${JSON.stringify(key)}: ${JSON.stringify(value)}\n}\n`;
@@ -649,19 +667,28 @@ export function flagLayer(entries: readonly (readonly [string, string | undefine
 
 function kindAt(segments: readonly string[]): Kind {
   let shape: Kind | Shape = ALL;
-  for (const segment of segments) shape = (shape as Shape)[segment]!;
-  return shape as Kind;
+  const invalid = () => new ConfigFileError(`Unknown setting path: ${terminalField(segments.join("."))}`);
+  for (const segment of segments) {
+    if (typeof shape === "string" || !Object.hasOwn(shape, segment)) throw invalid();
+    shape = shape[segment]!;
+  }
+  if (typeof shape !== "string") throw invalid();
+  return shape;
 }
 
 function setPath(target: Plain, segments: readonly string[], value: unknown): void {
   let node = target;
-  for (const segment of segments.slice(0, -1)) node = (node[segment] ??= {}) as Plain;
-  node[segments.at(-1)!] = value;
+  for (const [index, key] of segments.entries()) {
+    if (key === "__proto__" || key === "constructor" || key === "prototype") throw new ConfigFileError("Invalid setting path");
+    if (index === segments.length - 1) node[key] = value;
+    else node = (node[key] ??= {}) as Plain;
+  }
 }
 
 /** Hybrid merge: objects by key, scalars replaced, arrays joined without duplicates, null removes. */
 function merge(target: Plain, layer: Plain, label: string, sources: Map<string, string>, prefix = ""): void {
   for (const [key, value] of Object.entries(layer)) {
+    if (key === "__proto__" || key === "constructor" || key === "prototype") continue;
     const name = prefix ? `${prefix}.${key}` : key;
     if (value === null) {
       delete target[key];

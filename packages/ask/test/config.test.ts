@@ -292,6 +292,17 @@ test("ASK_* variables are typed and validated; flags report their own names", as
   assert.throws(() => flagLayer([["--max-tokens", "-1", ["maxTokens"]]]), /Invalid --max-tokens: must be a positive integer/);
 });
 
+test("configuration paths can only address settings declared by the schema", async (t) => {
+  const { project, env } = await sandbox(t);
+  const loaded = await loadSettings({ cwd: project, env: { ...env, ASK_CONFIG_CONTENT: '{"model":"test","constructor":null,"endpoint":{"toString":null}}' } });
+  assert.equal(loaded.settings.model, "test");
+  assert.ok(loaded.notes.some((note) => note.includes("unknown setting constructor")));
+  assert.ok(loaded.notes.some((note) => note.includes("unknown setting endpoint.toString")));
+  for (const segments of [["constructor"], ["endpoint", "toString"], ["endpoint"], ["model", "extra"]]) {
+    assert.throws(() => flagLayer([["--setting", "test", segments]]), /Unknown setting path/);
+  }
+});
+
 test("update block view is a validated, layered TUI preference", async (t) => {
   const { global, project, env, write } = await sandbox(t);
   assert.equal((await loadSettings({ interface: "tui", cwd: project, env })).settings.tui.updateView, undefined);
@@ -429,6 +440,9 @@ test("saveGlobalSetting writes only the user's global file, creating or editing 
     await chmod(path.join(global, "tui.jsonc"), 0o666);
     await assert.rejects(saveGlobalSetting("tui", "theme", "x", env), /not writing .*writable by every user/);
   }
+  await rm(path.join(global, "tui.jsonc"));
+  await mkdir(path.join(global, "tui.jsonc"));
+  await assert.rejects(saveGlobalSetting("tui", "theme", "x", env), /not writing .*not a regular file/);
 });
 
 test("cli.json sets the session TTL and spinner; ASK_SESSION_TTL and ASK_SPINNER override them", async (t) => {

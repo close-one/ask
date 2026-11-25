@@ -46,6 +46,11 @@ test("a URL containing a hash is not truncated", () => {
   assert.equal(parseDotenv("URL=https://host/path#frag").get("URL"), "https://host/path#frag");
 });
 
+test("dotenv splits only at the first equals sign", () => {
+  const parsed = parseDotenv('export TOKEN \t= "a=b"\nexport = literal\nBAD NAME = ignored');
+  assert.deepEqual([...parsed], [["TOKEN", "a=b"], ["export", "literal"]]);
+});
+
 test("settings left in a no-longer-read .env are explained without being applied", async (t) => {
   const dir = await mkdtemp(path.join(tmpdir(), "ask-legacy-"));
   t.after(() => rm(dir, { recursive: true, force: true }));

@@ -28,11 +28,12 @@ export function parseDotenv(text: string): Map<string, string> {
     const line = rawLine.trim();
     if (line.length === 0 || line.startsWith("#")) continue;
 
-    const match = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/.exec(line);
-    if (!match) continue;
-
-    const key = match[1]!;
-    let value = match[2] ?? "";
+    const equals = line.indexOf("=");
+    if (equals < 0) continue;
+    const key = line.slice(0, equals).trimEnd().replace(/^export\s+/, "");
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
+    let value = line.slice(equals + 1).trimStart();
+    if (/[\r\u2028\u2029]/.test(value)) continue;
 
     if (value.startsWith('"') && value.endsWith('"') && value.length >= 2) {
       value = value

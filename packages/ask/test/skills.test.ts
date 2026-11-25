@@ -64,7 +64,7 @@ test("front matter is parsed, and its absence is tolerated", () => {
   assert.equal(bare.body, "# Just instructions");
 
   // Unknown keys ignored, single quotes stripped, colons in values preserved.
-  const extra = parseFrontMatter("---\nname: 'x'\nlicense: MIT\ndescription: a: b\n---\nbody\n");
+  const extra = parseFrontMatter("---\r\n  NAME \t: 'x'\r\nlicense: MIT\r\ndescription: a: b\r\n---\r\nbody\r\n");
   assert.equal(extra.name, "x");
   assert.equal(extra.description, "a: b");
 });

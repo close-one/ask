@@ -68,16 +68,19 @@ export function parseFrontMatter(text: string): FrontMatter {
 
   const fields = new Map<string, string>();
   for (const line of (match[1] ?? "").split(/\r?\n/)) {
-    const field = /^([A-Za-z0-9_-]+)\s*:\s*(.*)$/.exec(line.trim());
-    if (!field) continue;
-    let value = (field[2] ?? "").trim();
+    const colon = line.indexOf(":");
+    if (colon < 0) continue;
+    const key = line.slice(0, colon).trim();
+    if (!/^[A-Za-z0-9_-]+$/.test(key)) continue;
+    let value = line.slice(colon + 1).trim();
+    if (/[\r\u2028\u2029]/.test(value)) continue;
     if (
       (value.startsWith('"') && value.endsWith('"')) ||
       (value.startsWith("'") && value.endsWith("'"))
     ) {
       value = value.slice(1, -1);
     }
-    fields.set(field[1]!.toLowerCase(), value);
+    fields.set(key.toLowerCase(), value);
   }
 
   return {

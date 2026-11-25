@@ -7,7 +7,8 @@
 // Values must be hex colours: a theme can only change colours, never send text
 // to the terminal. A later directory's theme replaces an earlier one's.
 
-import { readdir, readFile, stat } from "node:fs/promises";
+import { constants } from "node:fs";
+import { open, readdir } from "node:fs/promises";
 import path from "node:path";
 import { parseJsonc } from "@codehaus-au/ask/internal/config";
 import { terminalField } from "@codehaus-au/ask/internal/terminal";
@@ -19,6 +20,29 @@ const COLOR = /^#[0-9a-f]{6}(?:[0-9a-f]{2})?$/i;
 /** Colour roles a theme file may set; schema/theme.schema.json lists exactly these. */
 export const THEME_ROLES: readonly string[] = [...Object.keys(ASK_PALETTE), "selectionBg", "selectionFg"];
 const ROLES = new Set<string>(THEME_ROLES);
+
+async function readThemeFile(file: string): Promise<string> {
+  // Avoid blocking on a FIFO before we can check the opened file's type.
+  const handle = await open(file, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
+  try {
+    const info = await handle.stat();
+    const invalid = () => new Error(`${terminalField(file)}: not a regular file of 64 KiB or less`);
+    if (!info.isFile() || info.size > MAX_THEME_BYTES) throw invalid();
+
+    // The extra byte detects overflow if the file grows after the size check.
+    const buffer = Buffer.alloc(MAX_THEME_BYTES + 1);
+    let length = 0;
+    while (length < buffer.length) {
+      const { bytesRead } = await handle.read(buffer, length, buffer.length - length, length);
+      if (!bytesRead) break;
+      length += bytesRead;
+    }
+    if (length > MAX_THEME_BYTES) throw invalid();
+    return buffer.toString("utf8", 0, length);
+  } finally {
+    await handle.close();
+  }
+}
 
 /** Parse and validate one theme file against already-registered themes. */
 function parseTheme(file: string, text: string): { palette: ThemePalette; mode: ThemeMode; notes: string[] } {
@@ -60,9 +84,7 @@ export async function loadCustomThemes(dirs: readonly string[]): Promise<{ names
       if (!NAME.test(name)) { notes.push(`${terminalField(file)}: theme names use letters, digits, ".", "-" and "_" (skipped)`); continue; }
       if (files.length > 1) { notes.push(`${terminalField(themesDir)}: both ${name}.json and ${name}.jsonc exist; keep one (skipped)`); continue; }
       try {
-        const info = await stat(file);
-        if (!info.isFile() || info.size > MAX_THEME_BYTES) throw new Error(`${terminalField(file)}: not a regular file under 64 KB`);
-        const theme = parseTheme(file, await readFile(file, "utf8"));
+        const theme = parseTheme(file, await readThemeFile(file));
         notes.push(...theme.notes);
         addCustomTheme(name, theme.palette, theme.mode, file);
         names.push(name);

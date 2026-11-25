@@ -45,3 +45,21 @@ test("custom themes extend, override and validate, lowest-precedence directory f
     assert.deepEqual(THEME_NAMES.slice(1), [...THEME_NAMES.slice(1)].sort());
   } finally { await rm(base, { recursive: true, force: true }); }
 });
+
+test("custom themes accept regular files up to 64 KiB", async () => {
+  const base = await mkdtemp(path.join(tmpdir(), "ask-tui-themes-"));
+  try {
+    const dir = path.join(base, "themes");
+    await mkdir(dir);
+    await mkdir(path.join(dir, "not-a-file.json"));
+    await writeFile(path.join(dir, "at-limit.json"), "{}".padEnd(64 * 1024));
+    await writeFile(path.join(dir, "over-limit.json"), "{}".padEnd(64 * 1024 + 1));
+
+    const { names, notes } = await loadCustomThemes([base]);
+
+    assert.deepEqual(names, ["at-limit"]);
+    assert.equal(notes.length, 2);
+    assert.ok(notes.some((note) => note.endsWith("(theme not-a-file skipped)")));
+    assert.ok(notes.some((note) => /over-limit\.json: not a regular file of 64 KiB or less/.test(note)));
+  } finally { await rm(base, { recursive: true, force: true }); }
+});
